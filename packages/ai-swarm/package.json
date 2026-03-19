@@ -1,0 +1,17 @@
+{
+  "name": "@pacfi/ai-swarm",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./coordinator": "./src/coordinator.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.9.0",
+    "@pacfi/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0"
+  }
+}

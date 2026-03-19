@@ -1,0 +1,27 @@
+{
+  "name": "@pacfi/backend",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "lint": "eslint src",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "hono": "^3.11.0",
+    "drizzle-orm": "^0.29.0",
+    "postgres": "^3.4.0",
+    "dotenv": "^16.3.1",
+    "bs58": "^5.0.0",
+    "@anthropic-ai/sdk": "^0.9.0",
+    "zod": "^3.22.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.0",
+    "@types/node": "^20.10.0",
+
+  }
+}

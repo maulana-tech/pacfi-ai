@@ -1,0 +1,46 @@
+---
+import Layout from '../layouts/Layout.astro';
+---
+
+<Layout title="Pacfi AI - Home">
+  <main class="container">
+    <header class="p-6 text-center">
+      <h1>Pacfi AI</h1>
+      <p class="text-gray-600">Autonomous Trading Swarm Platform for Pacifica</p>
+    </header>
+
+    <section class="p-6">
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div class="bg-white border rounded-lg p-6 shadow">
+          <h2>Features</h2>
+          <ul class="mt-4">
+            <li>Multi-Agent AI Swarm Trading</li>
+            <li>Real-time Dashboard</li>
+            <li>Social Copy Trading</li>
+            <li>Advanced Risk Management</li>
+            <li>Leaderboard & Rankings</li>
+          </ul>
+        </div>
+
+        <div class="bg-white border rounded-lg p-6 shadow">
+          <h2>Getting Started</h2>
+          <p class="text-gray-600 mt-4">
+            Connect your Pacifica API key and start trading with AI-powered strategies.
+          </p>
+          <a href="/dashboard" class="mt-4 inline-block">Go to Dashboard</a>
+        </div>
+      </div>
+    </section>
+  </main>
+</Layout>
+
+<style>
+  ul {
+    list-style: disc;
+    padding-left: 1.5rem;
+  }
+
+  li {
+    margin-bottom: 0.5rem;
+  }
+</style>
