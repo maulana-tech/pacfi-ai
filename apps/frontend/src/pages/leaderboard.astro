@@ -1,0 +1,8 @@
+---
+import AppLayout from '../layouts/AppLayout.astro';
+import LeaderboardContent from '../components/LeaderboardContent';
+---
+
+<AppLayout title="Leaderboard" activeNav="leaderboard">
+  <LeaderboardContent client:load />
+</AppLayout>

@@ -1,0 +1,8 @@
+---
+import AppLayout from '../layouts/AppLayout.astro';
+import PortfolioContent from '../components/PortfolioContent';
+---
+
+<AppLayout title="Portfolio" activeNav="portfolio">
+  <PortfolioContent client:load />
+</AppLayout>
