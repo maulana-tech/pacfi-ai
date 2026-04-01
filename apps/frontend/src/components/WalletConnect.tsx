@@ -1,100 +1,196 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+
+interface WindowWithPhantom extends Window {
+  phantom?: {
+    solana?: {
+      isConnected: boolean;
+      publicKey: { toString: () => string } | null;
+      connect: (params?: {
+        onlyIfTrusted?: boolean;
+      }) => Promise<{ publicKey: { toString: () => string } }>;
+      disconnect: () => Promise<void>;
+      signMessage: (message: Uint8Array, encoding: string) => Promise<{ signature: Uint8Array }>;
+      on: (event: string, callback: (args: any) => void) => void;
+      off: (event: string, callback: (args: any) => void) => void;
+    };
+  };
+}
 
 interface WalletContextType {
   walletAddress: string | null;
   isConnected: boolean;
-  connect: () => Promise<void>;
-  disconnect: () => void;
+  isConnecting: boolean;
+  connect: () => Promise<string | null>;
+  disconnect: () => Promise<void>;
   signMessage: (message: string) => Promise<string>;
 }
+
+const WALLET_STORAGE_KEY = 'phantom_wallet_connected';
 
 export const useWallet = (): WalletContextType => {
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [isReady, setIsReady] = useState(false);
 
-  // Check if wallet is already connected
+  // Check if wallet was previously connected
   useEffect(() => {
-    const checkWallet = async () => {
-      if (typeof window !== 'undefined' && (window as any).phantom?.solana) {
-        try {
-          const phantom = (window as any).phantom.solana;
-          if (phantom.isConnected) {
-            const pubKey = phantom.publicKey.toString();
-            setWalletAddress(pubKey);
-            setIsConnected(true);
+    const initWallet = async () => {
+      if (typeof window === 'undefined') return;
+
+      const win = window as WindowWithPhantom;
+      const phantom = win.phantom?.solana;
+
+      if (!phantom) {
+        setIsReady(true);
+        return;
+      }
+
+      try {
+        // Check if user was previously connected
+        const wasConnected = localStorage.getItem(WALLET_STORAGE_KEY);
+
+        if (wasConnected === 'true') {
+          // Try silent connect (without popup if already trusted)
+          try {
+            const response = await phantom.connect({ onlyIfTrusted: true });
+            if (response?.publicKey) {
+              const pubKey = response.publicKey.toString();
+              setWalletAddress(pubKey);
+              setIsConnected(true);
+              localStorage.setItem(WALLET_STORAGE_KEY, 'true');
+            }
+          } catch (silentError) {
+            // Silent connect failed, user needs to manually connect
+            console.log('Silent connect failed, waiting for manual connect');
+            localStorage.removeItem(WALLET_STORAGE_KEY);
           }
-        } catch (error) {
-          console.error('Error checking wallet:', error);
         }
+
+        // Listen for account changes
+        const handleAccountChange = (publicKey: any) => {
+          if (publicKey) {
+            setWalletAddress(publicKey.toString());
+            setIsConnected(true);
+            localStorage.setItem(WALLET_STORAGE_KEY, 'true');
+          } else {
+            setWalletAddress(null);
+            setIsConnected(false);
+            localStorage.removeItem(WALLET_STORAGE_KEY);
+          }
+        };
+
+        const handleDisconnect = () => {
+          setWalletAddress(null);
+          setIsConnected(false);
+          localStorage.removeItem(WALLET_STORAGE_KEY);
+        };
+
+        phantom.on('accountChanged', handleAccountChange);
+        phantom.on('disconnect', handleDisconnect);
+
+        return () => {
+          phantom.off('accountChanged', handleAccountChange);
+          phantom.off('disconnect', handleDisconnect);
+        };
+      } catch (error) {
+        console.error('Error initializing wallet:', error);
+      } finally {
+        setIsReady(true);
       }
     };
 
-    checkWallet();
+    // Small delay to ensure Phantom has injected
+    const timer = setTimeout(initWallet, 300);
+    return () => clearTimeout(timer);
   }, []);
 
-  const connect = async () => {
-    if (typeof window === 'undefined') return;
+  const connect = useCallback(async (): Promise<string | null> => {
+    if (typeof window === 'undefined') return null;
 
-    const phantom = (window as any).phantom?.solana;
+    const win = window as WindowWithPhantom;
+    const phantom = win.phantom?.solana;
 
     if (!phantom) {
-      alert('Please install Phantom wallet');
-      return;
+      window.open('https://phantom.app/', '_blank');
+      alert('Please install Phantom wallet and refresh the page');
+      return null;
     }
+
+    setIsConnecting(true);
 
     try {
       const response = await phantom.connect();
       const pubKey = response.publicKey.toString();
       setWalletAddress(pubKey);
       setIsConnected(true);
+      localStorage.setItem(WALLET_STORAGE_KEY, 'true');
+      return pubKey;
     } catch (error) {
       console.error('Error connecting wallet:', error);
+      if (error instanceof Error) {
+        // Don't alert on user rejection
+        if (!error.message.includes('User rejected')) {
+          alert(`Failed to connect: ${error.message}`);
+        }
+      }
+      return null;
+    } finally {
+      setIsConnecting(false);
     }
-  };
+  }, []);
 
-  const disconnect = async () => {
+  const disconnect = useCallback(async (): Promise<void> => {
     if (typeof window === 'undefined') return;
 
-    const phantom = (window as any).phantom?.solana;
+    const win = window as WindowWithPhantom;
+    const phantom = win.phantom?.solana;
 
     if (phantom) {
       try {
         await phantom.disconnect();
-        setWalletAddress(null);
-        setIsConnected(false);
       } catch (error) {
         console.error('Error disconnecting wallet:', error);
       }
     }
-  };
 
-  const signMessage = async (message: string): Promise<string> => {
-    if (typeof window === 'undefined' || !isConnected) {
-      throw new Error('Wallet not connected');
-    }
+    setWalletAddress(null);
+    setIsConnected(false);
+    localStorage.removeItem(WALLET_STORAGE_KEY);
+  }, []);
 
-    const phantom = (window as any).phantom?.solana;
+  const signMessage = useCallback(
+    async (message: string): Promise<string> => {
+      if (typeof window === 'undefined' || !isConnected) {
+        throw new Error('Wallet not connected');
+      }
 
-    if (!phantom) {
-      throw new Error('Phantom wallet not found');
-    }
+      const win = window as WindowWithPhantom;
+      const phantom = win.phantom?.solana;
 
-    try {
-      const messageBytes = new TextEncoder().encode(message);
-      const response = await phantom.signMessage(messageBytes, 'utf8');
-      const signature = response.signature;
+      if (!phantom) {
+        throw new Error('Phantom wallet not found');
+      }
 
-      // Convert to base58 string
-      return signature.toString('base64');
-    } catch (error) {
-      console.error('Error signing message:', error);
-      throw error;
-    }
-  };
+      try {
+        const messageBytes = new TextEncoder().encode(message);
+        const response = await phantom.signMessage(messageBytes, 'utf8');
+        const signature = response.signature;
+
+        // Convert to base58-like string
+        return btoa(String.fromCharCode(...new Uint8Array(signature)));
+      } catch (error) {
+        console.error('Error signing message:', error);
+        throw error;
+      }
+    },
+    [isConnected]
+  );
 
   return {
     walletAddress,
     isConnected,
+    isConnecting,
     connect,
     disconnect,
     signMessage,
@@ -107,19 +203,35 @@ interface WalletConnectProps {
 }
 
 export default function WalletConnect({ onConnect, onDisconnect }: WalletConnectProps) {
-  const { walletAddress, isConnected, connect, disconnect } = useWallet();
+  const { walletAddress, isConnected, isConnecting, connect, disconnect } = useWallet();
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const handleConnect = async () => {
-    await connect();
-    if (walletAddress) {
-      onConnect?.(walletAddress);
+    const address = await connect();
+    if (address) {
+      onConnect?.(address);
     }
   };
 
-  const handleDisconnect = () => {
-    disconnect();
+  const handleDisconnect = async () => {
+    await disconnect();
     onDisconnect?.();
   };
+
+  // Prevent hydration mismatch
+  if (!mounted) {
+    return (
+      <div className="wallet-connect">
+        <button className="connect-btn" disabled>
+          Connect Wallet
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="wallet-connect">
@@ -133,8 +245,8 @@ export default function WalletConnect({ onConnect, onDisconnect }: WalletConnect
           </button>
         </div>
       ) : (
-        <button onClick={handleConnect} className="connect-btn">
-          Connect Wallet
+        <button onClick={handleConnect} disabled={isConnecting} className="connect-btn">
+          {isConnecting ? 'Connecting...' : 'Connect Wallet'}
         </button>
       )}
     </div>
@@ -158,11 +270,17 @@ const styles = `
     cursor: pointer;
     font-weight: 500;
     transition: all 0.2s;
+    font-size: 14px;
   }
 
-  .connect-btn:hover,
+  .connect-btn:hover:not(:disabled),
   .disconnect-btn:hover {
     background-color: #1d4ed8;
+  }
+
+  .connect-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
   }
 
   .wallet-info {
