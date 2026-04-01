@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 
 interface SidebarProps {
   activeNav?: string;
@@ -10,7 +10,7 @@ const navItems = [
     label: 'Dashboard',
     href: '/dashboard',
     icon: (
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+      <svg width="20" height="20" viewBox="0 0 16 16" fill="none">
         <rect x="1" y="1" width="6" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
         <rect x="9" y="1" width="6" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
         <rect x="1" y="9" width="6" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
@@ -23,9 +23,21 @@ const navItems = [
     label: 'Trading',
     href: '/trading',
     icon: (
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-        <polyline points="1,11 5,7 8,9 15,3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-        <polyline points="11,3 15,3 15,7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      <svg width="20" height="20" viewBox="0 0 16 16" fill="none">
+        <polyline
+          points="1,11 5,7 8,9 15,3"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <polyline
+          points="11,3 15,3 15,7"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
       </svg>
     ),
   },
@@ -34,9 +46,14 @@ const navItems = [
     label: 'Portfolio',
     href: '/portfolio',
     icon: (
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+      <svg width="20" height="20" viewBox="0 0 16 16" fill="none">
         <rect x="1" y="4" width="14" height="10" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
-        <path d="M5 4V3a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+        <path
+          d="M5 4V3a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v1"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+        />
         <line x1="1" y1="8" x2="15" y2="8" stroke="currentColor" strokeWidth="1.5" />
       </svg>
     ),
@@ -46,7 +63,7 @@ const navItems = [
     label: 'AI Swarm',
     href: '/swarm',
     icon: (
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+      <svg width="20" height="20" viewBox="0 0 16 16" fill="none">
         <circle cx="8" cy="8" r="2.5" stroke="currentColor" strokeWidth="1.5" />
         <circle cx="3" cy="4" r="1.5" stroke="currentColor" strokeWidth="1.5" />
         <circle cx="13" cy="4" r="1.5" stroke="currentColor" strokeWidth="1.5" />
@@ -64,7 +81,7 @@ const navItems = [
     label: 'Leaderboard',
     href: '/leaderboard',
     icon: (
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+      <svg width="20" height="20" viewBox="0 0 16 16" fill="none">
         <rect x="1" y="9" width="4" height="6" rx="1" stroke="currentColor" strokeWidth="1.5" />
         <rect x="6" y="5" width="4" height="10" rx="1" stroke="currentColor" strokeWidth="1.5" />
         <rect x="11" y="1" width="4" height="14" rx="1" stroke="currentColor" strokeWidth="1.5" />
@@ -76,6 +93,28 @@ const navItems = [
 export default function Sidebar({ activeNav = 'dashboard' }: SidebarProps) {
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  const [hoveredItem, setHoveredItem] = useState<string | null>(null);
+
+  useEffect(() => {
+    setMounted(true);
+
+    const wasConnected = localStorage.getItem('phantom_wallet_connected');
+    if (wasConnected === 'true') {
+      setTimeout(() => {
+        if (typeof window !== 'undefined' && (window as any).solana?.isPhantom) {
+          (window as any).solana
+            .connect({ onlyIfTrusted: true })
+            .then((resp: any) => {
+              setWalletAddress(resp.publicKey.toString());
+            })
+            .catch(() => {
+              localStorage.removeItem('phantom_wallet_connected');
+            });
+        }
+      }, 500);
+    }
+  }, []);
 
   const connectWallet = async () => {
     setConnecting(true);
@@ -83,6 +122,7 @@ export default function Sidebar({ activeNav = 'dashboard' }: SidebarProps) {
       if (typeof window !== 'undefined' && (window as any).solana?.isPhantom) {
         const resp = await (window as any).solana.connect();
         setWalletAddress(resp.publicKey.toString());
+        localStorage.setItem('phantom_wallet_connected', 'true');
       } else {
         alert('Phantom wallet not found. Please install it from phantom.app');
       }
@@ -97,6 +137,7 @@ export default function Sidebar({ activeNav = 'dashboard' }: SidebarProps) {
     if (typeof window !== 'undefined' && (window as any).solana) {
       await (window as any).solana.disconnect();
       setWalletAddress(null);
+      localStorage.removeItem('phantom_wallet_connected');
     }
   };
 
@@ -104,175 +145,152 @@ export default function Sidebar({ activeNav = 'dashboard' }: SidebarProps) {
     ? `${walletAddress.slice(0, 4)}...${walletAddress.slice(-4)}`
     : null;
 
+  if (!mounted) {
+    return <aside style={{ width: 80, minWidth: 80 }} />;
+  }
+
   return (
     <aside
       style={{
-        width: 220,
-        minWidth: 220,
-        background: '#FFFFFF',
-        borderRight: '1px solid #E5E7EB',
+        width: 80,
+        minWidth: 80,
         height: '100vh',
         display: 'flex',
         flexDirection: 'column',
-        overflow: 'hidden',
         position: 'sticky',
         top: 0,
+        background: 'linear-gradient(180deg, #F8FAFC 0%, #F1F5F9 100%)',
+        borderRight: '1px solid #E2E8F0',
+        overflow: 'hidden',
       }}
     >
       {/* Logo */}
       <div
         style={{
           padding: '20px 16px 16px',
-          borderBottom: '1px solid #F3F4F6',
           display: 'flex',
+          flexDirection: 'column',
           alignItems: 'center',
-          gap: 10,
         }}
       >
         <div
           style={{
-            width: 32,
-            height: 32,
-            background: '#2563EB',
-            borderRadius: 8,
+            width: 44,
+            height: 44,
+            background: 'linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%)',
+            borderRadius: 12,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             flexShrink: 0,
+            boxShadow: '0 4px 12px rgba(37, 99, 235, 0.3)',
           }}
         >
-          <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-            <path d="M3 13 L9 5 L15 9" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          <svg width="22" height="22" viewBox="0 0 18 18" fill="none">
+            <path
+              d="M3 13 L9 5 L15 9"
+              stroke="white"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
             <circle cx="15" cy="9" r="2" fill="white" />
           </svg>
         </div>
-        <div>
-          <div style={{ fontSize: 14, fontWeight: 700, color: '#111827', lineHeight: 1.2 }}>
-            Pacfi AI
-          </div>
-          <div style={{ fontSize: 10, color: '#9CA3AF', fontWeight: 500 }}>
-            Perpetual Trading
-          </div>
-        </div>
       </div>
 
-      {/* Navigation */}
-      <nav style={{ flex: 1, padding: '12px 10px', overflowY: 'auto' }}>
-        <div style={{ marginBottom: 4 }}>
-          <div
-            style={{
-              fontSize: 10,
-              fontWeight: 700,
-              color: '#9CA3AF',
-              textTransform: 'uppercase',
-              letterSpacing: '0.07em',
-              padding: '4px 10px 8px',
-            }}
-          >
-            Menu
-          </div>
-          {navItems.map((item) => {
-            const isActive = activeNav === item.id;
-            return (
-              <a
-                key={item.id}
-                href={item.href}
-                className={`nav-link${isActive ? ' active' : ''}`}
-                style={{ marginBottom: 2 }}
-              >
-                {item.icon}
-                <span>{item.label}</span>
-              </a>
-            );
-          })}
-        </div>
-      </nav>
-
-      {/* Wallet section */}
-      <div
+      {/* Navigation Icons - Centered */}
+      <nav
         style={{
-          padding: '12px 10px',
-          borderTop: '1px solid #F3F4F6',
+          flex: 1,
+          display: 'flex',
+          flexDirection: 'column',
+          justifyContent: 'center',
+          alignItems: 'center',
+          gap: 8,
+          padding: '16px 0',
         }}
       >
-        {walletAddress ? (
-          <div>
-            <div
+        {navItems.map((item) => {
+          const isActive = activeNav === item.id;
+          const isHovered = hoveredItem === item.id;
+
+          return (
+            <a
+              key={item.id}
+              href={item.href}
               style={{
+                position: 'relative',
                 display: 'flex',
                 alignItems: 'center',
-                gap: 8,
-                padding: '8px 10px',
-                background: '#F0FDF4',
-                borderRadius: 8,
-                marginBottom: 8,
-                border: '1px solid #D1FAE5',
+                justifyContent: 'center',
+                width: 48,
+                height: 48,
+                borderRadius: 14,
+                textDecoration: 'none',
+                transition: 'all 0.2s ease',
+                background: isActive
+                  ? 'linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%)'
+                  : '#FFFFFF',
+                color: isActive ? '#FFFFFF' : '#6B7280',
+                boxShadow: isActive
+                  ? '0 4px 12px rgba(37, 99, 235, 0.3)'
+                  : isHovered
+                    ? '0 4px 12px rgba(0, 0, 0, 0.08)'
+                    : '0 2px 8px rgba(0, 0, 0, 0.04)',
+                transform: isHovered ? 'translateY(-2px)' : 'translateY(0)',
+                border: isActive ? 'none' : '1px solid #E5E7EB',
               }}
+              onMouseEnter={() => setHoveredItem(item.id)}
+              onMouseLeave={() => setHoveredItem(null)}
             >
-              <span className="dot dot-green" />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 10, color: '#6B7280', fontWeight: 600 }}>Connected</div>
+              {item.icon}
+
+              {/* Tooltip */}
+              {(isHovered || isActive) && (
                 <div
                   style={{
+                    position: 'absolute',
+                    left: '100%',
+                    marginLeft: 12,
+                    background: isActive ? '#1D4ED8' : '#1F2937',
+                    color: '#FFFFFF',
+                    padding: '6px 12px',
+                    borderRadius: 8,
                     fontSize: 12,
-                    fontWeight: 700,
-                    color: '#111827',
-                    fontFamily: 'monospace',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
+                    fontWeight: 600,
+                    whiteSpace: 'nowrap',
+                    pointerEvents: 'none',
+                    zIndex: 1000,
+                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
+                    animation: 'fadeIn 0.15s ease',
                   }}
                 >
-                  {shortAddress}
+                  {item.label}
+                  <div
+                    style={{
+                      position: 'absolute',
+                      top: '50%',
+                      left: -6,
+                      transform: 'translateY(-50%)',
+                      width: 0,
+                      height: 0,
+                      borderTop: '5px solid transparent',
+                      borderBottom: '5px solid transparent',
+                      borderRight: `6px solid ${isActive ? '#1D4ED8' : '#1F2937'}`,
+                    }}
+                  />
                 </div>
-              </div>
-            </div>
-            <button
-              onClick={disconnectWallet}
-              className="btn btn-ghost btn-sm"
-              style={{ width: '100%' }}
-            >
-              Disconnect
-            </button>
-          </div>
-        ) : (
-          <button
-            onClick={connectWallet}
-            disabled={connecting}
-            className="btn btn-primary"
-            style={{ width: '100%' }}
-          >
-            {connecting ? (
-              <>
-                <svg
-                  width="12"
-                  height="12"
-                  viewBox="0 0 12 12"
-                  fill="none"
-                  style={{ animation: 'spin 1s linear infinite' }}
-                >
-                  <circle cx="6" cy="6" r="5" stroke="rgba(255,255,255,0.3)" strokeWidth="2" />
-                  <path d="M6 1 A5 5 0 0 1 11 6" stroke="white" strokeWidth="2" strokeLinecap="round" />
-                </svg>
-                Connecting...
-              </>
-            ) : (
-              <>
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                  <rect x="1" y="4" width="12" height="8" rx="1.5" stroke="white" strokeWidth="1.5" />
-                  <path d="M4 4V3a3 3 0 0 1 6 0v1" stroke="white" strokeWidth="1.5" strokeLinecap="round" />
-                  <circle cx="7" cy="8" r="1.5" fill="white" />
-                </svg>
-                Connect Wallet
-              </>
-            )}
-          </button>
-        )}
-      </div>
+              )}
+            </a>
+          );
+        })}
+      </nav>
 
       <style>{`
-        @keyframes spin {
-          from { transform: rotate(0deg); }
-          to { transform: rotate(360deg); }
+        @keyframes fadeIn {
+          from { opacity: 0; transform: translateX(-4px); }
+          to { opacity: 1; transform: translateX(0); }
         }
       `}</style>
     </aside>
