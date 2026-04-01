@@ -1,6 +1,7 @@
 ---
 import '../styles/global.css';
 import Sidebar from '../components/Sidebar';
+import WalletConnect from '../components/WalletConnect';
 
 interface Props {
   title: string;
@@ -23,7 +24,16 @@ const { title, activeNav = 'dashboard' } = Astro.props;
     <div class="app-shell">
       <Sidebar client:load activeNav={activeNav} />
       <div class="app-main">
-        <slot />
+        <!-- Top Header with Wallet Connect -->
+        <header class="app-header">
+          <div class="header-title">{title}</div>
+          <div class="header-wallet">
+            <WalletConnect client:load />
+          </div>
+        </header>
+        <div class="app-content">
+          <slot />
+        </div>
       </div>
     </div>
   </body>
@@ -39,9 +49,37 @@ const { title, activeNav = 'dashboard' } = Astro.props;
 
   .app-main {
     flex: 1;
-    overflow-y: auto;
-    overflow-x: hidden;
+    overflow: hidden;
     display: flex;
     flex-direction: column;
+  }
+
+  .app-header {
+    height: 64px;
+    background: #FFFFFF;
+    border-bottom: 1px solid #E5E7EB;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 28px;
+    flex-shrink: 0;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  }
+
+  .header-title {
+    font-size: 18px;
+    font-weight: 700;
+    color: #111827;
+  }
+
+  .header-wallet {
+    display: flex;
+    align-items: center;
+  }
+
+  .app-content {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
   }
 </style>
