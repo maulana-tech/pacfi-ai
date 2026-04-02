@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import SwarmVisualization from './SwarmVisualization';
+import React, { useState } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import SwarmVisualization from './SwarmVisualization';
+import SwarmSkeleton from './SwarmSkeleton';
 
 const AGENT_HISTORY = [
   { cycle: 'C1', analyst: 82, sentiment: 71, risk: 75, coordinator: 78 },
@@ -10,41 +11,6 @@ const AGENT_HISTORY = [
   { cycle: 'C5', analyst: 55, sentiment: 62, risk: 60, coordinator: 58 },
   { cycle: 'C6', analyst: 88, sentiment: 79, risk: 82, coordinator: 83 },
   { cycle: 'C7', analyst: 72, sentiment: 68, risk: 74, coordinator: 71 },
-];
-
-const AGENT_STATS = [
-  {
-    name: 'Market Analyst',
-    model: 'Qwen-Max',
-    accuracy: '71.2%',
-    calls: 142,
-    avgConf: '76%',
-    color: '#2563EB',
-  },
-  {
-    name: 'Sentiment Agent',
-    model: 'Qwen-Plus',
-    accuracy: '68.5%',
-    calls: 142,
-    avgConf: '69%',
-    color: '#7C3AED',
-  },
-  {
-    name: 'Risk Manager',
-    model: 'Qwen-Turbo',
-    accuracy: '74.8%',
-    calls: 142,
-    avgConf: '73%',
-    color: '#0891B2',
-  },
-  {
-    name: 'Coordinator',
-    model: 'Qwen-Max',
-    accuracy: '68.5%',
-    calls: 142,
-    avgConf: '72%',
-    color: '#059669',
-  },
 ];
 
 const RECENT_DECISIONS = [
@@ -203,11 +169,6 @@ export default function SwarmContent() {
   } | null>(null);
   const [cycleIndex, setCycleIndex] = useState(0);
   const [lastRun, setLastRun] = useState<string | null>(null);
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => {
-    setMounted(true);
-  }, []);
 
   const getStatusColor = (status: Agent['status']) => {
     if (status === 'analyzing') return '#F59E0B';
@@ -230,10 +191,8 @@ export default function SwarmContent() {
     const cycle = MOCK_CYCLES[cycleIndex % MOCK_CYCLES.length];
     setCycleIndex((i) => i + 1);
 
-    // Reset agents
     setAgents(INITIAL_AGENTS.map((a) => ({ ...a, status: 'idle' as const })));
 
-    // Animate each agent sequentially
     for (let i = 0; i < cycle.agents.length; i++) {
       const agentData = cycle.agents[i];
 
@@ -264,15 +223,6 @@ export default function SwarmContent() {
     setLastRun(new Date().toLocaleTimeString());
     setIsRunning(false);
   };
-
-  // Prevent hydration issues by not rendering D3 until mounted
-  if (!mounted) {
-    return (
-      <div style={{ padding: '24px 28px', display: 'flex', flexDirection: 'column', gap: 16 }}>
-        <div>Loading...</div>
-      </div>
-    );
-  }
 
   return (
     <div style={{ padding: '24px 28px', display: 'flex', flexDirection: 'column', gap: 16 }}>
