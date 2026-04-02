@@ -66,11 +66,6 @@ export default function SwarmVisualization({
   const simulationRef = useRef<d3.Simulation<SimulationNode, SimulationLink> | null>(null);
   const [selectedItem, setSelectedItem] = useState<SelectedItem | null>(null);
   const [showEdgeLabels, setShowEdgeLabels] = useState(true);
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => {
-    setMounted(true);
-  }, []);
 
   const getStatusColor = (status: Agent['status']) => {
     switch (status) {
@@ -131,7 +126,7 @@ export default function SwarmVisualization({
   }, [isRunning]);
 
   useEffect(() => {
-    if (!svgRef.current || !containerRef.current || !mounted) return;
+    if (!svgRef.current || !containerRef.current) return;
 
     // Stop previous simulation
     if (simulationRef.current) {
@@ -562,11 +557,11 @@ export default function SwarmVisualization({
       }
       simulation.stop();
     };
-  }, [agents, isRunning, width, height, showEdgeLabels, mounted, animateParticles]);
+  }, [agents, isRunning, width, height, showEdgeLabels, animateParticles]);
 
   // Update styles when agents change
   useEffect(() => {
-    if (!svgRef.current || !mounted) return;
+    if (!svgRef.current) return;
 
     const svg = d3.select(svgRef.current);
 
@@ -583,24 +578,7 @@ export default function SwarmVisualization({
       .attr('stroke', (d: any) => getStatusColor(d.status))
       .style('filter', (d: any) => getStatusGlow(d.status))
       .style('opacity', (d: any) => (d.status === 'analyzing' ? 0.6 : 0.3));
-  }, [agents, mounted]);
-
-  if (!mounted) {
-    return (
-      <div
-        style={{
-          width: '100%',
-          height: '100%',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          background: '#FAFAFA',
-        }}
-      >
-        <div style={{ color: '#999' }}>Loading visualization...</div>
-      </div>
-    );
-  }
+  }, [agents]);
 
   return (
     <div
