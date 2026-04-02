@@ -12,23 +12,94 @@ const { title, activeNav = 'dashboard' } = Astro.props;
 ---
 
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" transition:animate="none">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#ffffff" />
+    <meta name="view-transition" content="same-origin" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>{title} — Pacfi AI</title>
+    
+    <!-- Preconnect to external domains -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="dns-prefetch" href="https://fonts.googleapis.com" />
+    
+    <!-- Prefetch common routes -->
+    <link rel="prefetch" href="/dashboard" />
+    <link rel="prefetch" href="/trading" />
+    <link rel="prefetch" href="/portfolio" />
+    <link rel="prefetch" href="/swarm" />
+    <link rel="prefetch" href="/leaderboard" />
+    
+    <style is:global>
+      /* Smooth page transitions with View Transitions API */
+      @view-transition {
+        navigation: auto;
+      }
+      
+      /* Only transition the content, not the sidebar */
+      ::view-transition-old(content-only) {
+        animation: fade-out 0.15s ease-out;
+      }
+      
+      ::view-transition-new(content-only) {
+        animation: fade-in 0.15s ease-out;
+      }
+      
+      @keyframes fade-out {
+        from { opacity: 1; transform: translateY(0); }
+        to { opacity: 0; transform: translateY(-10px); }
+      }
+      
+      @keyframes fade-in {
+        from { opacity: 0; transform: translateY(10px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      
+      /* Persist sidebar across transitions */
+      ::view-transition-old(sidebar),
+      ::view-transition-new(sidebar) {
+        animation: none;
+      }
+      
+      /* Skeleton loading animation */
+      @keyframes shimmer {
+        0% { background-position: -200% 0; }
+        100% { background-position: 200% 0; }
+      }
+      
+      .skeleton {
+        background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+        background-size: 200% 100%;
+        animation: shimmer 1.5s infinite;
+      }
+      
+      /* Performance: Reduce motion for users who prefer it */
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.01ms !important;
+        }
+      }
+    </style>
   </head>
   <body>
     <div class="app-shell">
-      <Sidebar client:load activeNav={activeNav} />
-      <div class="app-main">
+      <!-- Sidebar with transition persist - won't reload on navigation -->
+      <div class="sidebar-wrapper" transition:name="sidebar" transition:persist>
+        <Sidebar client:only="react" activeNav={activeNav} />
+      </div>
+      
+      <div class="app-main" transition:name="content-only">
         <!-- Top Header with Wallet Connect -->
-        <header class="app-header">
+        <header class="app-header" transition:persist>
           <div class="header-title">{title}</div>
           <div class="header-wallet">
-            <WalletConnect client:load />
+            <WalletConnect client:only="react" />
           </div>
         </header>
         <div class="app-content">
@@ -36,6 +107,20 @@ const { title, activeNav = 'dashboard' } = Astro.props;
         </div>
       </div>
     </div>
+    
+    <!-- Prefetch on hover script -->
+    <script>
+      // Prefetch routes on link hover for instant navigation
+      document.addEventListener('mouseover', (e) => {
+        const link = e.target.closest('a');
+        if (link && link.href && link.href.startsWith(window.location.origin)) {
+          const prefetchLink = document.createElement('link');
+          prefetchLink.rel = 'prefetch';
+          prefetchLink.href = link.href;
+          document.head.appendChild(prefetchLink);
+        }
+      }, { passive: true });
+    </script>
   </body>
 </html>
 
@@ -47,11 +132,17 @@ const { title, activeNav = 'dashboard' } = Astro.props;
     background: #F9FAFB;
   }
 
+  .sidebar-wrapper {
+    flex-shrink: 0;
+    z-index: 100;
+  }
+
   .app-main {
     flex: 1;
     overflow: hidden;
     display: flex;
     flex-direction: column;
+    min-width: 0;
   }
 
   .app-header {
@@ -81,5 +172,6 @@ const { title, activeNav = 'dashboard' } = Astro.props;
     flex: 1;
     overflow-y: auto;
     overflow-x: hidden;
+    scroll-behavior: smooth;
   }
 </style>
