@@ -100,16 +100,6 @@ DASHSCOPE_API_KEY=...
 VITE_API_URL=http://localhost:3001
 ```
 
-## Development Guidelines
-
-- Use TypeScript for all code
-- Follow existing code style
-- Write tests for critical functions
-- Keep components small and focused
-- Optimize for performance (LCP, FID, CLS)
-- Use semantic HTML
-- Light mode only, no gradients/emotes
-
 ## License
 
 MIT
