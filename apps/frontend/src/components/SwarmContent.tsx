@@ -1,7 +1,20 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import SwarmVisualization from './SwarmVisualization';
 import SwarmSkeleton from './SwarmSkeleton';
+
+interface PacificaMarketData {
+  symbol: string;
+  mark: string;
+  mid: string;
+  oracle: string;
+  funding: string;
+  next_funding: string;
+  open_interest: string;
+  volume_24h: string;
+  yesterday_price: string;
+  timestamp: number;
+}
 
 const AGENT_HISTORY = [
   { cycle: 'C1', analyst: 82, sentiment: 71, risk: 75, coordinator: 78 },
@@ -169,6 +182,24 @@ export default function SwarmContent() {
   } | null>(null);
   const [cycleIndex, setCycleIndex] = useState(0);
   const [lastRun, setLastRun] = useState<string | null>(null);
+  const [marketData, setMarketData] = useState<PacificaMarketData[]>([]);
+
+  useEffect(() => {
+    const fetchMarketData = async () => {
+      try {
+        const res = await fetch('https://test-api.pacifica.fi/api/v1/info/prices');
+        const json = (await res.json()) as { success: boolean; data: PacificaMarketData[] };
+        if (json.success && Array.isArray(json.data)) {
+          setMarketData(json.data);
+        }
+      } catch (err) {
+        console.error('[SwarmContent] Failed to fetch market data:', err);
+      }
+    };
+    fetchMarketData();
+    const interval = setInterval(fetchMarketData, 30000);
+    return () => clearInterval(interval);
+  }, []);
 
   const getStatusColor = (status: Agent['status']) => {
     if (status === 'analyzing') return '#F59E0B';
@@ -242,103 +273,100 @@ export default function SwarmContent() {
         ))}
       </div>
 
-      {/* D3 Swarm Visualization + Status Panel */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 14 }}>
-        {/* D3 Visualization */}
-        <div className="card">
-          <div className="card-header">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span className="card-title">AI Swarm Network</span>
-              {isRunning && (
-                <span
-                  className="badge"
-                  style={{ background: '#FFFBEB', color: '#D97706', fontSize: 10 }}
-                >
-                  Running
-                </span>
-              )}
-            </div>
+      {/* AI Swarm Network - Full Width */}
+      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+        <div className="card-header" style={{ padding: '14px 20px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span className="card-title">AI Swarm Network</span>
+            {isRunning && (
+              <span
+                className="badge"
+                style={{ background: '#FFFBEB', color: '#D97706', fontSize: 10 }}
+              >
+                Running
+              </span>
+            )}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             {lastRun && <span style={{ fontSize: 11, color: '#9CA3AF' }}>Last: {lastRun}</span>}
-          </div>
-          <div style={{ height: 400, position: 'relative' }}>
-            <SwarmVisualization agents={agents} isRunning={isRunning} width={600} height={400} />
-          </div>
-          <div
-            style={{
-              padding: '12px 20px',
-              borderTop: '1px solid #F3F4F6',
-              display: 'flex',
-              gap: 8,
-            }}
-          >
             <button
               onClick={runCycle}
               disabled={isRunning}
               className="btn btn-primary"
-              style={{ flex: 1 }}
+              style={{ padding: '6px 16px', fontSize: 12 }}
             >
               {isRunning ? 'Analyzing...' : 'Run Cycle'}
             </button>
           </div>
-          {finalDecision && (
-            <div
-              style={{
-                margin: '0 20px 16px',
-                padding: '12px 16px',
-                background:
-                  finalDecision.action === 'BUY'
-                    ? '#F0FDF4'
-                    : finalDecision.action === 'SELL'
-                      ? '#FEF2F2'
-                      : '#F9FAFB',
-                borderRadius: 8,
-                border: `1px solid ${finalDecision.action === 'BUY' ? '#D1FAE5' : finalDecision.action === 'SELL' ? '#FEE2E2' : '#E5E7EB'}`,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-              }}
-            >
-              <div>
-                <div
+        </div>
+        <div style={{ height: 'calc(100vh - 320px)', minHeight: 500, position: 'relative' }}>
+          <SwarmVisualization
+            agents={agents}
+            isRunning={isRunning}
+            showMarketNodes
+            marketData={marketData}
+          />
+        </div>
+        {finalDecision && (
+          <div
+            style={{
+              margin: '0 20px 16px',
+              padding: '12px 16px',
+              background:
+                finalDecision.action === 'BUY'
+                  ? '#F0FDF4'
+                  : finalDecision.action === 'SELL'
+                    ? '#FEF2F2'
+                    : '#F9FAFB',
+              borderRadius: 8,
+              border: `1px solid ${finalDecision.action === 'BUY' ? '#D1FAE5' : finalDecision.action === 'SELL' ? '#FEE2E2' : '#E5E7EB'}`,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+            }}
+          >
+            <div>
+              <div
+                style={{
+                  fontSize: 10,
+                  fontWeight: 700,
+                  color: '#9CA3AF',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.06em',
+                  marginBottom: 4,
+                }}
+              >
+                Swarm Decision
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span
                   style={{
-                    fontSize: 10,
-                    fontWeight: 700,
-                    color: '#9CA3AF',
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.06em',
-                    marginBottom: 4,
+                    fontSize: 18,
+                    fontWeight: 800,
+                    color: getDecisionColor(finalDecision.action),
                   }}
                 >
-                  Swarm Decision
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span
-                    style={{
-                      fontSize: 18,
-                      fontWeight: 800,
-                      color: getDecisionColor(finalDecision.action),
-                    }}
-                  >
-                    {finalDecision.action}
-                  </span>
-                  <span style={{ fontSize: 12, color: '#6B7280' }}>
-                    {finalDecision.confidence}% confidence
-                  </span>
-                </div>
-              </div>
-              <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: 10, color: '#9CA3AF', fontWeight: 600, marginBottom: 2 }}>
-                  Leverage
-                </div>
-                <span className="num" style={{ fontSize: 16, fontWeight: 700, color: '#374151' }}>
-                  {finalDecision.leverage}x
+                  {finalDecision.action}
+                </span>
+                <span style={{ fontSize: 12, color: '#6B7280' }}>
+                  {finalDecision.confidence}% confidence
                 </span>
               </div>
             </div>
-          )}
-        </div>
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: 10, color: '#9CA3AF', fontWeight: 600, marginBottom: 2 }}>
+                Leverage
+              </div>
+              <span className="num" style={{ fontSize: 16, fontWeight: 700, color: '#374151' }}>
+                {finalDecision.leverage}x
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
 
-        {/* Agent Status Panel */}
+      {/* Agent Status + Recent Decisions side by side */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
         <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
           <div style={{ padding: '16px 20px', borderBottom: '1px solid #F3F4F6' }}>
             <span className="card-title">Agent Status</span>
@@ -394,7 +422,7 @@ export default function SwarmContent() {
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
                         whiteSpace: 'nowrap',
-                        maxWidth: 220,
+                        maxWidth: '100%',
                       }}
                     >
                       {agent.reasoning}
@@ -444,118 +472,81 @@ export default function SwarmContent() {
             ))}
           </div>
         </div>
-      </div>
 
-      {/* Confidence chart */}
-      <div className="card">
-        <div className="card-header">
-          <span className="card-title">Agent Confidence per Cycle</span>
-          <span style={{ fontSize: 11, color: '#9CA3AF' }}>Last 7 cycles</span>
-        </div>
-        <div style={{ height: 180 }}>
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={AGENT_HISTORY} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" vertical={false} />
-              <XAxis
-                dataKey="cycle"
-                tick={{ fontSize: 10, fill: '#9CA3AF' }}
-                tickLine={false}
-                axisLine={false}
-              />
-              <YAxis
-                tick={{ fontSize: 10, fill: '#9CA3AF' }}
-                tickLine={false}
-                axisLine={false}
-                domain={[0, 100]}
-              />
-              <Tooltip
-                contentStyle={{
-                  background: '#FFF',
-                  border: '1px solid #E5E7EB',
-                  borderRadius: 6,
-                  fontSize: 11,
-                }}
-              />
-              <Bar dataKey="analyst" name="Market Analyst" fill="#2563EB" radius={[2, 2, 0, 0]} />
-              <Bar dataKey="sentiment" name="Sentiment" fill="#7C3AED" radius={[2, 2, 0, 0]} />
-              <Bar dataKey="risk" name="Risk Manager" fill="#0891B2" radius={[2, 2, 0, 0]} />
-              <Bar dataKey="coordinator" name="Coordinator" fill="#059669" radius={[2, 2, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-
-      {/* Recent decisions */}
-      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-        <div style={{ padding: '12px 20px', borderBottom: '1px solid #F3F4F6' }}>
-          <span className="card-title">Recent AI Decisions</span>
-        </div>
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Time</th>
-              <th>Symbol</th>
-              <th>Action</th>
-              <th style={{ textAlign: 'right' }}>Confidence</th>
-              <th>Result</th>
-              <th style={{ textAlign: 'right' }}>P&L</th>
-            </tr>
-          </thead>
-          <tbody>
-            {RECENT_DECISIONS.map((d, i) => (
-              <tr key={i}>
-                <td>
-                  <span style={{ fontSize: 12, color: '#9CA3AF' }}>{d.time}</span>
-                </td>
-                <td>
-                  <span style={{ fontWeight: 600, color: '#111827' }}>{d.symbol}</span>
-                </td>
-                <td>
-                  <span className={d.action === 'BUY' ? 'badge badge-buy' : 'badge badge-sell'}>
-                    {d.action}
-                  </span>
-                </td>
-                <td style={{ textAlign: 'right' }}>
-                  <span className="num" style={{ fontSize: 12, fontWeight: 600, color: '#374151' }}>
-                    {d.confidence}%
-                  </span>
-                </td>
-                <td>
-                  <span
-                    className="badge"
-                    style={{
-                      background:
-                        d.result === 'WIN'
-                          ? '#ECFDF5'
-                          : d.result === 'LOSS'
-                            ? '#FEF2F2'
-                            : '#EFF6FF',
-                      color:
-                        d.result === 'WIN'
-                          ? '#059669'
-                          : d.result === 'LOSS'
-                            ? '#DC2626'
-                            : '#2563EB',
-                    }}
-                  >
-                    {d.result}
-                  </span>
-                </td>
-                <td style={{ textAlign: 'right' }}>
-                  <span
-                    className="num"
-                    style={{
-                      fontWeight: 700,
-                      color: d.pnl.startsWith('+') ? '#10B981' : '#EF4444',
-                    }}
-                  >
-                    {d.pnl}
-                  </span>
-                </td>
+        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+          <div style={{ padding: '12px 20px', borderBottom: '1px solid #F3F4F6' }}>
+            <span className="card-title">Recent AI Decisions</span>
+          </div>
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Symbol</th>
+                <th>Action</th>
+                <th style={{ textAlign: 'right' }}>Conf.</th>
+                <th>Result</th>
+                <th style={{ textAlign: 'right' }}>P&L</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {RECENT_DECISIONS.map((d, i) => (
+                <tr key={i}>
+                  <td>
+                    <span style={{ fontSize: 12, color: '#9CA3AF' }}>{d.time}</span>
+                  </td>
+                  <td>
+                    <span style={{ fontWeight: 600, color: '#111827' }}>{d.symbol}</span>
+                  </td>
+                  <td>
+                    <span className={d.action === 'BUY' ? 'badge badge-buy' : 'badge badge-sell'}>
+                      {d.action}
+                    </span>
+                  </td>
+                  <td style={{ textAlign: 'right' }}>
+                    <span
+                      className="num"
+                      style={{ fontSize: 12, fontWeight: 600, color: '#374151' }}
+                    >
+                      {d.confidence}%
+                    </span>
+                  </td>
+                  <td>
+                    <span
+                      className="badge"
+                      style={{
+                        background:
+                          d.result === 'WIN'
+                            ? '#ECFDF5'
+                            : d.result === 'LOSS'
+                              ? '#FEF2F2'
+                              : '#EFF6FF',
+                        color:
+                          d.result === 'WIN'
+                            ? '#059669'
+                            : d.result === 'LOSS'
+                              ? '#DC2626'
+                              : '#2563EB',
+                      }}
+                    >
+                      {d.result}
+                    </span>
+                  </td>
+                  <td style={{ textAlign: 'right' }}>
+                    <span
+                      className="num"
+                      style={{
+                        fontWeight: 700,
+                        color: d.pnl.startsWith('+') ? '#10B981' : '#EF4444',
+                      }}
+                    >
+                      {d.pnl}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
