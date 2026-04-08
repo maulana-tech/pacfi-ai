@@ -1,4 +1,3 @@
-import { Ed25519Keypair } from '@solana/web3.js';
 import bs58 from 'bs58';
 
 interface PacificaOrderRequest {
@@ -43,17 +42,17 @@ export class PacificaClient {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.apiKey}`,
+        Authorization: `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify(order),
     });
 
     if (!response.ok) {
-      const error = await response.json();
+      const error = (await response.json()) as { message?: string };
       throw new Error(`Pacifica API error: ${error.message}`);
     }
 
-    return response.json();
+    return response.json() as Promise<PacificaOrderResponse>;
   }
 
   /**
@@ -62,7 +61,7 @@ export class PacificaClient {
   async getPositions(walletAddress: string): Promise<any[]> {
     const response = await fetch(`${this.apiUrl}/positions?account=${walletAddress}`, {
       headers: {
-        'Authorization': `Bearer ${this.apiKey}`,
+        Authorization: `Bearer ${this.apiKey}`,
       },
     });
 
@@ -70,24 +69,7 @@ export class PacificaClient {
       throw new Error('Failed to fetch positions');
     }
 
-    return response.json();
-  }
-
-  /**
-   * Get user balance
-   */
-  async getBalance(walletAddress: string): Promise<any> {
-    const response = await fetch(`${this.apiUrl}/balance?account=${walletAddress}`, {
-      headers: {
-        'Authorization': `Bearer ${this.apiKey}`,
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error('Failed to fetch balance');
-    }
-
-    return response.json();
+    return response.json() as Promise<any[]>;
   }
 
   /**
@@ -96,7 +78,7 @@ export class PacificaClient {
   async getMarketData(symbol: string): Promise<any> {
     const response = await fetch(`${this.apiUrl}/market/${symbol}`, {
       headers: {
-        'Authorization': `Bearer ${this.apiKey}`,
+        Authorization: `Bearer ${this.apiKey}`,
       },
     });
 
@@ -119,7 +101,7 @@ export class PacificaClient {
       `${this.apiUrl}/orders?account=${walletAddress}&limit=${limit}&offset=${offset}`,
       {
         headers: {
-          'Authorization': `Bearer ${this.apiKey}`,
+          Authorization: `Bearer ${this.apiKey}`,
         },
       }
     );
@@ -128,7 +110,7 @@ export class PacificaClient {
       throw new Error('Failed to fetch order history');
     }
 
-    return response.json();
+    return response.json() as Promise<any[]>;
   }
 
   /**
@@ -139,7 +121,7 @@ export class PacificaClient {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.apiKey}`,
+        Authorization: `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify({ account: walletAddress }),
     });
@@ -157,7 +139,7 @@ export class PacificaClient {
   async getFundingRate(symbol: string): Promise<any> {
     const response = await fetch(`${this.apiUrl}/funding-rate/${symbol}`, {
       headers: {
-        'Authorization': `Bearer ${this.apiKey}`,
+        Authorization: `Bearer ${this.apiKey}`,
       },
     });
 
@@ -174,7 +156,7 @@ export class PacificaClient {
   async getSymbols(): Promise<string[]> {
     const response = await fetch(`${this.apiUrl}/symbols`, {
       headers: {
-        'Authorization': `Bearer ${this.apiKey}`,
+        Authorization: `Bearer ${this.apiKey}`,
       },
     });
 
@@ -182,7 +164,7 @@ export class PacificaClient {
       throw new Error('Failed to fetch symbols');
     }
 
-    const data = await response.json();
+    const data = (await response.json()) as { symbols?: string[] };
     return data.symbols || [];
   }
 }
