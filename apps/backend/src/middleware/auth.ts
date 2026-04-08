@@ -44,7 +44,6 @@ export const getWalletContext = (c: any): WalletContext | null => {
 
   return {
     walletAddress,
-    signature,
+    signature: signature ?? undefined,
   };
 };
-
