@@ -122,7 +122,7 @@ export class PacificaClient {
         throw new Error(`Pacifica API error: ${response.statusText}`);
       }
 
-      const data = await response.json();
+      const data = (await response.json()) as Record<string, string>;
 
       return {
         symbol,
@@ -143,9 +143,7 @@ export class PacificaClient {
    */
   async getPositions(walletAddress: string): Promise<any> {
     try {
-      const response = await fetch(
-        `${this.baseUrl}/account/positions?account=${walletAddress}`
-      );
+      const response = await fetch(`${this.baseUrl}/account/positions?account=${walletAddress}`);
 
       if (!response.ok) {
         throw new Error(`Pacifica API error: ${response.statusText}`);
@@ -163,15 +161,13 @@ export class PacificaClient {
    */
   async getBalance(walletAddress: string): Promise<number> {
     try {
-      const response = await fetch(
-        `${this.baseUrl}/account/balance?account=${walletAddress}`
-      );
+      const response = await fetch(`${this.baseUrl}/account/balance?account=${walletAddress}`);
 
       if (!response.ok) {
         throw new Error(`Pacifica API error: ${response.statusText}`);
       }
 
-      const data = await response.json();
+      const data = (await response.json()) as { totalBalance: string };
       return parseFloat(data.totalBalance);
     } catch (error) {
       console.error('[PacificaClient] Error fetching balance:', error);
