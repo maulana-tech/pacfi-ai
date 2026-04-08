@@ -1,10 +1,11 @@
-import Anthropic from '@anthropic-ai/sdk';
 import { SwarmDecision, MarketData } from '../types';
 
 interface AgentResponse {
   signal?: 'BUY' | 'SELL' | 'HOLD';
+  action?: 'BUY' | 'SELL' | 'HOLD';
   confidence?: number;
   reason?: string;
+  reasoning?: string;
   sentiment?: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
   strength?: number;
   positionSize?: number;
@@ -13,43 +14,56 @@ interface AgentResponse {
 }
 
 export class QwenAgent {
-  private client: Anthropic;
+  private apiKey: string;
   private model: string;
   private systemPrompt: string;
+  private baseUrl: string;
 
-  constructor(role: string, prompt: string, model: string = 'claude-3-5-sonnet-20241022') {
-    this.client = new Anthropic({
-      apiKey: process.env.DASHSCOPE_API_KEY,
-    });
+  constructor(role: string, prompt: string, model: string = 'qwen-max') {
+    this.apiKey = process.env.DASHSCOPE_API_KEY || '';
     this.model = model;
     this.systemPrompt = prompt;
+    this.baseUrl = 'https://dashscope.aliyuncs.com/api/v1';
   }
 
   async analyze(context: string): Promise<AgentResponse> {
     try {
-      const response = await this.client.messages.create({
-        model: this.model,
-        max_tokens: 1024,
-        system: this.systemPrompt,
-        messages: [
-          {
-            role: 'user',
-            content: context,
-          },
-        ],
+      const response = await fetch(`${this.baseUrl}/services/aigc/text-generation/generation`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: this.model,
+          messages: [
+            { role: 'system', content: this.systemPrompt },
+            { role: 'user', content: context },
+          ],
+          temperature: 0.7,
+          max_tokens: 1024,
+        }),
       });
 
-      const content = response.content[0];
-      if (content.type !== 'text') {
-        throw new Error('Unexpected response type from AI');
+      if (!response.ok) {
+        throw new Error(`API error: ${response.statusText}`);
       }
 
-      try {
-        return JSON.parse(content.text);
-      } catch {
-        console.error('[QwenAgent] Failed to parse response:', content.text);
-        return {};
+      const data = (await response.json()) as {
+        output?: { choices?: { message?: { content?: string } }[] };
+      };
+
+      const content = data.output?.choices?.[0]?.message?.content;
+      if (content) {
+        try {
+          return JSON.parse(content) as AgentResponse;
+        } catch {
+          console.error('[QwenAgent] Failed to parse response:', content);
+          return {};
+        }
       }
+
+      return {};
     } catch (error) {
       console.error('[QwenAgent] Error analyzing:', error);
       throw error;
@@ -107,52 +121,28 @@ export class SwarmCoordinator {
 
   async executeCycle(marketData: MarketData, portfolioBalance: number): Promise<SwarmDecision> {
     try {
-      // 1. Market Analysis
-      const marketAnalysisStr = await this.marketAnalyst.analyze(JSON.stringify(marketData));
-      const marketAnalysis = marketAnalysisStr as AgentResponse;
-
-      // 2. Sentiment Analysis
-      const sentimentAnalysisStr = await this.sentimentAgent.analyze(
-        JSON.stringify({
-          fundingRate: marketData.fundingRate,
-          volume: marketData.volume24h,
-        })
+      const marketAnalysis = await this.marketAnalyst.analyze(JSON.stringify(marketData));
+      const sentimentAnalysis = await this.sentimentAgent.analyze(
+        JSON.stringify({ fundingRate: marketData.fundingRate, volume: marketData.volume24h })
       );
-      const sentimentAnalysis = sentimentAnalysisStr as AgentResponse;
-
-      // 3. Risk Calculation
-      const riskContextStr = JSON.stringify({
-        marketAnalysis,
-        sentiment: sentimentAnalysis,
-        portfolioBalance,
-      });
-      const riskParamsStr = await this.riskManager.analyze(riskContextStr);
-      const riskParams = riskParamsStr as AgentResponse;
-
-      // 4. Final Decision
-      const finalContextStr = JSON.stringify({
-        market: marketAnalysis,
-        sentiment: sentimentAnalysis,
-        risk: riskParams,
-      });
-      const finalDecisionStr = await this.coordinator.analyze(finalContextStr);
-      const finalDecision = finalDecisionStr as AgentResponse;
+      const riskParams = await this.riskManager.analyze(
+        JSON.stringify({ marketAnalysis, sentiment: sentimentAnalysis, portfolioBalance })
+      );
+      const finalDecision = await this.coordinator.analyze(
+        JSON.stringify({ market: marketAnalysis, sentiment: sentimentAnalysis, risk: riskParams })
+      );
 
       return {
-        action: (finalDecision.action as 'BUY' | 'SELL' | 'HOLD') || 'HOLD',
+        action: finalDecision.action || finalDecision.signal || 'HOLD',
         confidence: finalDecision.confidence || 0,
-        reasoning: finalDecision.reason || 'No reasoning provided',
+        reasoning: finalDecision.reasoning || finalDecision.reason || 'No reasoning provided',
         positionSize: riskParams.positionSize,
         leverage: riskParams.leverage,
         stopLossPct: riskParams.stopLossPct,
       };
     } catch (error) {
       console.error('[SwarmCoordinator] Error executing cycle:', error);
-      return {
-        action: 'HOLD',
-        confidence: 0,
-        reasoning: 'Error in swarm analysis',
-      };
+      return { action: 'HOLD', confidence: 0, reasoning: 'Error in swarm analysis' };
     }
   }
 }
