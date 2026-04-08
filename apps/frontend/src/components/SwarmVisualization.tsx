@@ -1,5 +1,7 @@
-import React, { useEffect, useRef, useCallback, useState } from 'react';
-import * as d3 from 'd3';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
+import Graph from 'graphology';
+import forceAtlas2 from 'graphology-layout-forceatlas2';
+import noverlap from 'graphology-layout-noverlap';
 
 interface Agent {
   id: string;
@@ -10,8 +12,35 @@ interface Agent {
   confidence?: number;
   reasoning?: string;
   color: string;
-  attributes?: Record<string, any>;
+  attributes?: Record<string, unknown>;
   createdAt?: string;
+}
+
+interface MarketNode {
+  id: string;
+  symbol: string;
+  price: string;
+  change: string;
+  color: string;
+  funding?: string;
+  nextFunding?: string;
+  volume24h?: string;
+  openInterest?: string;
+  markPrice?: string;
+  oraclePrice?: string;
+}
+
+interface PacificaMarketData {
+  symbol: string;
+  mark: string;
+  mid: string;
+  oracle: string;
+  funding: string;
+  next_funding: string;
+  open_interest: string;
+  volume_24h: string;
+  yesterday_price: string;
+  timestamp: number;
 }
 
 interface SwarmVisualizationProps {
@@ -19,81 +48,82 @@ interface SwarmVisualizationProps {
   isRunning: boolean;
   width?: number;
   height?: number;
-}
-
-interface ParticleData {
-  id: string;
-  source: { x: number; y: number };
-  target: { x: number; y: number };
-  progress: number;
-  speed: number;
+  showMarketNodes?: boolean;
+  marketData?: PacificaMarketData[];
 }
 
 interface SelectedItem {
-  type: 'node';
-  data: Agent;
+  type: 'node' | 'market';
+  data: Agent | MarketNode;
   color: string;
 }
 
-interface SimulationNode extends d3.SimulationNodeDatum {
-  id: string;
-  name: string;
-  role: string;
-  status: 'idle' | 'analyzing' | 'done';
-  color: string;
-  rawData: Agent;
+const STATUS_COLORS: Record<string, string> = {
+  analyzing: '#F59E0B',
+  done: '#10B981',
+  idle: '#9CA3AF',
+};
+
+const LINK_VISUALS: Record<string, { hue: string; width: number }> = {
+  DATA_FLOW: { hue: '#3b82f6', width: 1.5 },
+  SYNC: { hue: '#8b5cf6', width: 1.2 },
+  _fallback: { hue: '#94a3b8', width: 1 },
+};
+
+function hexRgb(h: string): [number, number, number] {
+  return [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
 }
 
-interface SimulationLink extends d3.SimulationLinkDatum<SimulationNode> {
-  source: string | SimulationNode;
-  target: string | SimulationNode;
-  type: string;
-  name: string;
-  curvature: number;
-  pairTotal: number;
+function rgbHex(r: number, g: number, b: number): string {
+  const c = (v: number) => Math.max(0, Math.min(255, Math.round(v)));
+  return '#' + [c(r), c(g), c(b)].map((v) => v.toString(16).padStart(2, '0')).join('');
+}
+
+function fadeToWhite(hex: string, keep: number): string {
+  const [r, g, b] = hexRgb(hex);
+  const W = 250;
+  return rgbHex(W + (r - W) * keep, W + (g - W) * keep, W + (b - W) * keep);
+}
+
+function darken(hex: string, factor: number): string {
+  const [r, g, b] = hexRgb(hex);
+  return rgbHex(
+    r + (0 - r) * (1 - 1 / factor),
+    g + (0 - g) * (1 - 1 / factor),
+    b + (0 - b) * (1 - 1 / factor)
+  );
 }
 
 export default function SwarmVisualization({
   agents,
   isRunning,
-  width = 600,
-  height = 400,
+  showMarketNodes = false,
+  marketData = [],
 }: SwarmVisualizationProps) {
-  const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const animationRef = useRef<number | null>(null);
-  const particlesRef = useRef<ParticleData[]>([]);
-  const simulationRef = useRef<d3.Simulation<SimulationNode, SimulationLink> | null>(null);
+  const sigmaRef = useRef<any>(null);
+  const graphRef = useRef<Graph | null>(null);
   const [selectedItem, setSelectedItem] = useState<SelectedItem | null>(null);
   const [showEdgeLabels, setShowEdgeLabels] = useState(true);
 
-  const getStatusColor = (status: Agent['status']) => {
-    switch (status) {
-      case 'analyzing':
-        return '#F59E0B';
-      case 'done':
-        return '#10B981';
-      default:
-        return '#9CA3AF';
-    }
-  };
+  const selRef = useRef<SelectedItem | null>(null);
+  const showLabelsRef = useRef(showEdgeLabels);
+  const isRunningRef = useRef(isRunning);
 
-  const getStatusGlow = (status: Agent['status']) => {
-    switch (status) {
-      case 'analyzing':
-        return 'drop-shadow(0 0 8px rgba(245, 158, 11, 0.6))';
-      case 'done':
-        return 'drop-shadow(0 0 6px rgba(16, 185, 129, 0.5))';
-      default:
-        return 'none';
-    }
-  };
+  useEffect(() => {
+    selRef.current = selectedItem;
+  }, [selectedItem]);
+  useEffect(() => {
+    showLabelsRef.current = showEdgeLabels;
+  }, [showEdgeLabels]);
+  useEffect(() => {
+    isRunningRef.current = isRunning;
+  }, [isRunning]);
 
   const formatDateTime = (dateStr?: string) => {
     if (!dateStr) return '';
     try {
-      const date = new Date(dateStr);
-      return date.toLocaleString('en-US', {
+      return new Date(dateStr).toLocaleString('en-US', {
         month: 'short',
         day: 'numeric',
         year: 'numeric',
@@ -106,483 +136,366 @@ export default function SwarmVisualization({
     }
   };
 
-  const animateParticles = useCallback(() => {
-    if (!svgRef.current || !isRunning) return;
-
-    const svg = d3.select(svgRef.current);
-    const particleGroup = svg.select('.particles');
-
-    particlesRef.current.forEach((particle) => {
-      particle.progress += particle.speed;
-      if (particle.progress > 1) particle.progress = 0;
-    });
-
-    particleGroup
-      .selectAll<SVGCircleElement, ParticleData>('circle')
-      .attr('cx', (d: ParticleData) => d.source.x + (d.target.x - d.source.x) * d.progress)
-      .attr('cy', (d: ParticleData) => d.source.y + (d.target.y - d.source.y) * d.progress);
-
-    animationRef.current = requestAnimationFrame(animateParticles);
-  }, [isRunning]);
+  const cleanup = useCallback(() => {
+    sigmaRef.current?.kill();
+    sigmaRef.current = null;
+    graphRef.current = null;
+  }, []);
 
   useEffect(() => {
-    if (!svgRef.current || !containerRef.current) return;
+    const el = containerRef.current;
+    if (!el || !agents.length) return;
 
-    // Stop previous simulation
-    if (simulationRef.current) {
-      simulationRef.current.stop();
-    }
-
-    const svg = d3.select(svgRef.current);
-    svg.selectAll('*').remove();
-
-    const margin = { top: 20, right: 20, bottom: 20, left: 20 };
-    const innerWidth = width - margin.left - margin.right;
-    const innerHeight = height - margin.top - margin.bottom;
-
-    svg.attr('width', width).attr('height', height).attr('viewBox', `0 0 ${width} ${height}`);
-
-    const g = svg.append('g').attr('transform', `translate(${margin.left},${margin.top})`);
-
-    // Prepare nodes data
-    const nodes = agents.map((agent) => ({
-      id: agent.id,
-      name: agent.name,
-      role: agent.role,
-      status: agent.status,
-      color: agent.color,
-      rawData: agent,
-    }));
-
-    // Define links - all connected to coordinator with multiple connections
-    const links: any[] = [
-      { source: 'market_analyst', target: 'coordinator', type: 'DATA_FLOW', name: 'Market Data' },
-      { source: 'sentiment_agent', target: 'coordinator', type: 'DATA_FLOW', name: 'Sentiment' },
-      { source: 'risk_manager', target: 'coordinator', type: 'DATA_FLOW', name: 'Risk Analysis' },
-      { source: 'market_analyst', target: 'sentiment_agent', type: 'SYNC', name: 'Sync' },
-      { source: 'sentiment_agent', target: 'risk_manager', type: 'SYNC', name: 'Sync' },
-      { source: 'risk_manager', target: 'market_analyst', type: 'SYNC', name: 'Sync' },
-    ];
-
-    // Calculate edge curvature for multiple edges
-    const edgePairCount: Record<string, number> = {};
-    links.forEach((e) => {
-      const pairKey = [e.source, e.target].sort().join('_');
-      edgePairCount[pairKey] = (edgePairCount[pairKey] || 0) + 1;
+    let didBoot = false;
+    const ro = new ResizeObserver((entries) => {
+      const { width: w, height: h } = entries[0].contentRect;
+      if (!w || !h || didBoot) return;
+      didBoot = true;
+      ro.disconnect();
+      cleanup();
+      bootstrap(el, w, h);
     });
-
-    const edgePairIndex: Record<string, number> = {};
-    links.forEach((e) => {
-      const pairKey = [e.source, e.target].sort().join('_');
-      const currentIndex = edgePairIndex[pairKey] || 0;
-      edgePairIndex[pairKey] = currentIndex + 1;
-
-      const totalCount = edgePairCount[pairKey];
-      let curvature = 0;
-      if (totalCount > 1) {
-        const curvatureRange = Math.min(1.2, 0.6 + totalCount * 0.15);
-        curvature = (currentIndex / (totalCount - 1) - 0.5) * curvatureRange * 2;
-        const isReversed = e.source > e.target;
-        if (isReversed) curvature = -curvature;
-      }
-
-      e.curvature = curvature;
-      e.pairTotal = totalCount;
-    });
-
-    // Force simulation
-    const simulation = d3
-      .forceSimulation<SimulationNode>(nodes as SimulationNode[])
-      .force(
-        'link',
-        d3
-          .forceLink<SimulationNode, SimulationLink>(links as SimulationLink[])
-          .id((d) => d.id)
-          .distance((d) => {
-            const baseDistance = 120;
-            const edgeCount = d.pairTotal || 1;
-            return baseDistance + (edgeCount - 1) * 40;
-          })
-      )
-      .force('charge', d3.forceManyBody().strength(-500))
-      .force('center', d3.forceCenter(innerWidth / 2, innerHeight / 2))
-      .force('collide', d3.forceCollide().radius(45))
-      .force('x', d3.forceX(innerWidth / 2).strength(0.05))
-      .force('y', d3.forceY(innerHeight / 2).strength(0.05));
-
-    simulationRef.current = simulation;
-
-    // Zoom behavior
-    const zoom = d3
-      .zoom()
-      .extent([
-        [0, 0],
-        [width, height],
-      ])
-      .scaleExtent([0.5, 4])
-      .on('zoom', (event) => {
-        g.attr('transform', event.transform);
-      });
-
-    svg.call(zoom as any);
-
-    // Helper functions for curved paths
-    const getLinkPath = (d: any) => {
-      const sx = d.source.x;
-      const sy = d.source.y;
-      const tx = d.target.x;
-      const ty = d.target.y;
-
-      if (d.curvature === 0) {
-        return `M${sx},${sy} L${tx},${ty}`;
-      }
-
-      const dx = tx - sx;
-      const dy = ty - sy;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      const pairTotal = d.pairTotal || 1;
-      const offsetRatio = 0.25 + pairTotal * 0.05;
-      const baseOffset = Math.max(30, dist * offsetRatio);
-      const offsetX = (-dy / dist) * d.curvature * baseOffset;
-      const offsetY = (dx / dist) * d.curvature * baseOffset;
-      const cx = (sx + tx) / 2 + offsetX;
-      const cy = (sy + ty) / 2 + offsetY;
-
-      return `M${sx},${sy} Q${cx},${cy} ${tx},${ty}`;
-    };
-
-    const getLinkMidpoint = (d: any) => {
-      const sx = d.source.x;
-      const sy = d.source.y;
-      const tx = d.target.x;
-      const ty = d.target.y;
-
-      if (d.curvature === 0) {
-        return { x: (sx + tx) / 2, y: (sy + ty) / 2 };
-      }
-
-      const dx = tx - sx;
-      const dy = ty - sy;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      const pairTotal = d.pairTotal || 1;
-      const offsetRatio = 0.25 + pairTotal * 0.05;
-      const baseOffset = Math.max(30, dist * offsetRatio);
-      const offsetX = (-dy / dist) * d.curvature * baseOffset;
-      const offsetY = (dx / dist) * d.curvature * baseOffset;
-      const cx = (sx + tx) / 2 + offsetX;
-      const cy = (sy + ty) / 2 + offsetY;
-
-      const midX = 0.25 * sx + 0.5 * cx + 0.25 * tx;
-      const midY = 0.25 * sy + 0.5 * cy + 0.25 * ty;
-
-      return { x: midX, y: midY };
-    };
-
-    // Links group
-    const linkGroup = g.append('g').attr('class', 'links');
-
-    // Link paths
-    const link = linkGroup
-      .selectAll('path')
-      .data(links)
-      .enter()
-      .append('path')
-      .attr('stroke', '#C0C0C0')
-      .attr('stroke-width', 2)
-      .attr('fill', 'none')
-      .style('cursor', 'pointer')
-      .on('click', (event: any, d: any) => {
-        event.stopPropagation();
-        linkGroup.selectAll('path').attr('stroke', '#C0C0C0').attr('stroke-width', 2);
-        d3.select(event.target).attr('stroke', '#2563EB').attr('stroke-width', 3);
-      });
-
-    // Link labels background
-    const linkLabelBg = linkGroup
-      .selectAll('rect')
-      .data(links)
-      .enter()
-      .append('rect')
-      .attr('fill', 'rgba(255,255,255,0.95)')
-      .attr('rx', 3)
-      .attr('ry', 3)
-      .style('cursor', 'pointer')
-      .style('pointer-events', 'all')
-      .style('display', showEdgeLabels ? 'block' : 'none')
-      .on('click', (event: any, d: any) => {
-        event.stopPropagation();
-        linkGroup.selectAll('path').attr('stroke', '#C0C0C0').attr('stroke-width', 2);
-        link
-          .filter((l: any) => l === d)
-          .attr('stroke', '#2563EB')
-          .attr('stroke-width', 3);
-      });
-
-    // Link labels
-    const linkLabels = linkGroup
-      .selectAll('text')
-      .data(links)
-      .enter()
-      .append('text')
-      .text((d: any) => d.name)
-      .attr('font-size', '9px')
-      .attr('fill', '#666')
-      .attr('text-anchor', 'middle')
-      .attr('dominant-baseline', 'middle')
-      .style('cursor', 'pointer')
-      .style('pointer-events', 'all')
-      .style('font-family', 'system-ui, sans-serif')
-      .style('display', showEdgeLabels ? 'block' : 'none')
-      .on('click', (event: any, d: any) => {
-        event.stopPropagation();
-        linkGroup.selectAll('path').attr('stroke', '#C0C0C0').attr('stroke-width', 2);
-        link
-          .filter((l: any) => l === d)
-          .attr('stroke', '#2563EB')
-          .attr('stroke-width', 3);
-      });
-
-    // Particle container
-    g.append('g').attr('class', 'particles');
-
-    // Initialize particles if running
-    if (isRunning) {
-      particlesRef.current = links
-        .filter((_: any, i: number) => i % 2 === 0)
-        .map((link: any, i: number) => ({
-          id: `particle-${i}`,
-          source: { x: 0, y: 0 },
-          target: { x: 0, y: 0 },
-          progress: Math.random(),
-          speed: 0.008 + Math.random() * 0.006,
-        }));
-
-      const particleGroup = g.select('.particles');
-      particleGroup
-        .selectAll('circle')
-        .data(particlesRef.current)
-        .enter()
-        .append('circle')
-        .attr('r', 3)
-        .attr('fill', '#3B82F6')
-        .style('opacity', 0.8);
-
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-      animateParticles();
-    }
-
-    // Nodes group
-    const nodeGroup = g.append('g').attr('class', 'nodes');
-
-    // Node circles
-    const node = nodeGroup
-      .selectAll('g')
-      .data(nodes)
-      .enter()
-      .append('g')
-      .style('cursor', 'pointer')
-      .call(
-        d3
-          .drag()
-          .on('start', (event: any, d: any) => {
-            d.fx = d.x;
-            d.fy = d.y;
-            d._dragStartX = event.x;
-            d._dragStartY = event.y;
-            d._isDragging = false;
-          })
-          .on('drag', (event: any, d: any) => {
-            const dx = event.x - d._dragStartX;
-            const dy = event.y - d._dragStartY;
-            const distance = Math.sqrt(dx * dx + dy * dy);
-
-            if (!d._isDragging && distance > 3) {
-              d._isDragging = true;
-              simulation.alphaTarget(0.3).restart();
-            }
-
-            if (d._isDragging) {
-              d.fx = event.x;
-              d.fy = event.y;
-            }
-          })
-          .on('end', (event: any, d: any) => {
-            if (d._isDragging) {
-              simulation.alphaTarget(0);
-            }
-            d.fx = null;
-            d.fy = null;
-            d._isDragging = false;
-          }) as any
-      )
-      .on('click', (event: any, d: any) => {
-        event.stopPropagation();
-        node.selectAll('circle').attr('stroke', '#fff').attr('stroke-width', 3);
-        linkGroup.selectAll('path').attr('stroke', '#C0C0C0').attr('stroke-width', 2);
-        d3.select(event.currentTarget)
-          .select('circle')
-          .attr('stroke', d.color)
-          .attr('stroke-width', 4);
-        link
-          .filter((l: any) => l.source.id === d.id || l.target.id === d.id)
-          .attr('stroke', d.color)
-          .attr('stroke-width', 2.5);
-
-        setSelectedItem({
-          type: 'node',
-          data: d.rawData,
-          color: d.color,
-        });
-      })
-      .on('mouseenter', (event: any, d: any) => {
-        if (!selectedItem || selectedItem.data.id !== d.rawData.id) {
-          d3.select(event.currentTarget)
-            .select('circle')
-            .attr('stroke', '#333')
-            .attr('stroke-width', 4);
-        }
-      })
-      .on('mouseleave', (event: any, d: any) => {
-        if (!selectedItem || selectedItem.data.id !== d.rawData.id) {
-          d3.select(event.currentTarget)
-            .select('circle')
-            .attr('stroke', '#fff')
-            .attr('stroke-width', 3)
-            .style('filter', getStatusGlow(d.status));
-        }
-      });
-
-    // Outer glow
-    node
-      .append('circle')
-      .attr('class', 'glow')
-      .attr('r', 32)
-      .attr('fill', 'none')
-      .attr('stroke', (d: any) => getStatusColor(d.status))
-      .attr('stroke-width', 2)
-      .style('opacity', 0.3)
-      .style('filter', (d: any) => getStatusGlow(d.status));
-
-    // Main circle
-    node
-      .append('circle')
-      .attr('class', 'main')
-      .attr('r', 22)
-      .attr('fill', (d: any) => d.color)
-      .attr('stroke', '#fff')
-      .attr('stroke-width', 3);
-
-    // Status indicator
-    node
-      .append('circle')
-      .attr('class', 'status')
-      .attr('r', 6)
-      .attr('cx', 14)
-      .attr('cy', 14)
-      .attr('fill', (d: any) => getStatusColor(d.status))
-      .attr('stroke', '#fff')
-      .attr('stroke-width', 1.5);
-
-    // Node labels
-    const nodeLabels = nodeGroup
-      .selectAll('text')
-      .data(nodes)
-      .enter()
-      .append('text')
-      .text((d: any) => (d.name.length > 10 ? d.name.substring(0, 10) + '…' : d.name))
-      .attr('font-size', '11px')
-      .attr('fill', '#333')
-      .attr('font-weight', '600')
-      .attr('dx', 28)
-      .attr('dy', 4)
-      .style('pointer-events', 'none')
-      .style('font-family', 'system-ui, sans-serif');
-
-    // Simulation tick
-    simulation.on('tick', () => {
-      link.attr('d', (d: any) => getLinkPath(d));
-
-      linkLabels.each(function (d: any) {
-        const mid = getLinkMidpoint(d);
-        d3.select(this).attr('x', mid.x).attr('y', mid.y);
-      });
-
-      linkLabelBg.each(function (d: any, i: number) {
-        const mid = getLinkMidpoint(d);
-        const textEl = linkLabels.nodes()[i];
-        const bbox = (textEl as SVGTextElement).getBBox();
-        d3.select(this)
-          .attr('x', mid.x - bbox.width / 2 - 4)
-          .attr('y', mid.y - bbox.height / 2 - 2)
-          .attr('width', bbox.width + 8)
-          .attr('height', bbox.height + 4);
-      });
-
-      node.attr('transform', (d: any) => `translate(${d.x},${d.y})`);
-
-      nodeLabels.attr('x', (d: any) => d.x).attr('y', (d: any) => d.y);
-
-      // Update particle positions
-      if (isRunning) {
-        const particleGroup = g.select('.particles');
-        particleGroup
-          .selectAll<SVGCircleElement, ParticleData>('circle')
-          .attr('cx', (d: ParticleData, i: number) => {
-            const link = links[i % links.length];
-            if (!link?.source?.x || !link?.target?.x) return 0;
-            d.source = { x: link.source.x, y: link.source.y };
-            d.target = { x: link.target.x, y: link.target.y };
-            return d.source.x + (d.target.x - d.source.x) * d.progress;
-          })
-          .attr('cy', (d: ParticleData, i: number) => {
-            const link = links[i % links.length];
-            if (!link?.source?.y || !link?.target?.y) return 0;
-            return d.source.y + (d.target.y - d.source.y) * d.progress;
-          });
-      }
-    });
-
-    // Click background to deselect
-    svg.on('click', () => {
-      setSelectedItem(null);
-      node.selectAll('circle').attr('stroke', '#fff').attr('stroke-width', 3);
-      linkGroup.selectAll('path').attr('stroke', '#C0C0C0').attr('stroke-width', 2);
-    });
+    ro.observe(el);
 
     return () => {
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-      simulation.stop();
+      ro.disconnect();
+      cleanup();
     };
-  }, [agents, isRunning, width, height, showEdgeLabels, animateParticles]);
+  }, [agents, cleanup]);
 
-  // Update styles when agents change
   useEffect(() => {
-    if (!svgRef.current) return;
+    sigmaRef.current?.refresh();
+  }, [selectedItem, isRunning]);
 
-    const svg = d3.select(svgRef.current);
-
-    svg
-      .selectAll('.status')
-      .transition()
-      .duration(300)
-      .attr('fill', (d: any) => getStatusColor(d.status));
-
-    svg
-      .selectAll('.glow')
-      .transition()
-      .duration(300)
-      .attr('stroke', (d: any) => getStatusColor(d.status))
-      .style('filter', (d: any) => getStatusGlow(d.status))
-      .style('opacity', (d: any) => (d.status === 'analyzing' ? 0.6 : 0.3));
+  useEffect(() => {
+    const graph = graphRef.current;
+    if (!graph) return;
+    agents.forEach((agent) => {
+      if (graph.hasNode(agent.id)) {
+        graph.mergeNodeAttributes(agent.id, {
+          rawData: agent,
+          statusColor: STATUS_COLORS[agent.status] || STATUS_COLORS.idle,
+        });
+      }
+    });
+    sigmaRef.current?.refresh();
   }, [agents]);
+
+  function bootstrap(container: HTMLDivElement, canvasW: number, canvasH: number) {
+    const N = agents.length;
+    const PHI = Math.PI * (3 - Math.sqrt(5));
+    const SPIRAL_RADIUS = Math.sqrt(N) * 80;
+
+    const graph = new Graph({ multi: false });
+    graphRef.current = graph;
+
+    agents.forEach((agent, i) => {
+      const theta = i * PHI;
+      const r = SPIRAL_RADIUS * Math.sqrt((i + 1) / Math.max(N, 1));
+      const jitter = SPIRAL_RADIUS * 0.15;
+      graph.addNode(agent.id, {
+        x: r * Math.cos(theta) + (Math.random() - 0.5) * jitter,
+        y: r * Math.sin(theta) + (Math.random() - 0.5) * jitter,
+        size: 22,
+        color: agent.color,
+        label: agent.name,
+        nodeType: agent.role,
+        rawData: agent,
+        statusColor: STATUS_COLORS[agent.status] || STATUS_COLORS.idle,
+        mass: agent.role === 'Final Decision' ? 6 : 2,
+      });
+    });
+
+    if (showMarketNodes && marketData.length > 0) {
+      const SYMBOL_COLORS: Record<string, string> = {
+        BTC: '#F7931A',
+        ETH: '#627EEA',
+        SOL: '#9945FF',
+        WIF: '#A7E87D',
+        DOGE: '#C3A634',
+        AAVE: '#B6509E',
+        ARB: '#28A0F0',
+        SUI: '#6FBCF0',
+        LINK: '#2A5ADA',
+        AVAX: '#E84142',
+      };
+
+      const topMarkets = marketData.slice(0, 6);
+
+      const marketNodes: MarketNode[] = topMarkets.map((m) => {
+        const markPrice = parseFloat(m.mark || m.oracle || '0');
+        const yesterdayPrice = parseFloat(m.yesterday_price || m.mark || '0');
+        const changePercent =
+          yesterdayPrice > 0
+            ? (((markPrice - yesterdayPrice) / yesterdayPrice) * 100).toFixed(2)
+            : '0.00';
+
+        return {
+          id: `mkt_${m.symbol.toLowerCase()}`,
+          symbol: m.symbol,
+          price:
+            markPrice >= 1000
+              ? `$${markPrice.toLocaleString('en-US', { maximumFractionDigits: 0 })}`
+              : markPrice >= 1
+                ? `$${markPrice.toFixed(2)}`
+                : `$${markPrice.toFixed(4)}`,
+          change: `${markPrice >= yesterdayPrice ? '+' : ''}${changePercent}%`,
+          color: SYMBOL_COLORS[m.symbol] || '#6B7280',
+          funding: m.funding,
+          nextFunding: m.next_funding,
+          volume24h: m.volume_24h,
+          openInterest: m.open_interest,
+          markPrice: m.mark,
+          oraclePrice: m.oracle,
+        };
+      });
+
+      marketNodes.forEach((m) => {
+        const angle = Math.random() * Math.PI * 2;
+        const dist = SPIRAL_RADIUS * 1.6;
+        graph.addNode(m.id, {
+          x: dist * Math.cos(angle) + (Math.random() - 0.5) * 40,
+          y: dist * Math.sin(angle) + (Math.random() - 0.5) * 40,
+          size: 16,
+          color: m.color,
+          label: `${m.symbol} ${m.price}`,
+          nodeType: 'market',
+          rawData: m,
+          isMarketNode: true,
+        });
+      });
+
+      marketNodes.forEach((m) => {
+        const targets = ['market_analyst', 'sentiment_agent'];
+        targets.forEach((target) => {
+          if (graph.hasNode(m.id) && graph.hasNode(target) && !graph.hasEdge(m.id, target)) {
+            graph.addEdge(m.id, target, {
+              kind: 'MARKET_FEED',
+              label: showLabelsRef.current ? `${m.symbol} Feed` : '',
+              size: 0.8,
+              color: m.color + '44',
+              type: 'curved',
+              curvature: 0.15 + Math.random() * 0.1,
+            });
+          }
+        });
+      });
+    }
+
+    const links: { source: string; target: string; name: string; kind: string }[] = [
+      { source: 'market_analyst', target: 'coordinator', name: 'Market Data', kind: 'DATA_FLOW' },
+      { source: 'sentiment_agent', target: 'coordinator', name: 'Sentiment', kind: 'DATA_FLOW' },
+      { source: 'risk_manager', target: 'coordinator', name: 'Risk Analysis', kind: 'DATA_FLOW' },
+      { source: 'market_analyst', target: 'sentiment_agent', name: 'Sync', kind: 'SYNC' },
+      { source: 'sentiment_agent', target: 'risk_manager', name: 'Sync', kind: 'SYNC' },
+      { source: 'risk_manager', target: 'market_analyst', name: 'Sync', kind: 'SYNC' },
+    ];
+
+    links.forEach((link) => {
+      if (graph.hasNode(link.source) && graph.hasNode(link.target)) {
+        if (graph.hasEdge(link.source, link.target)) return;
+        const vis = LINK_VISUALS[link.kind] ?? LINK_VISUALS._fallback;
+        graph.addEdge(link.source, link.target, {
+          kind: link.kind,
+          label: showLabelsRef.current ? link.name : '',
+          size: vis.width,
+          color: vis.hue + '55',
+          type: 'curved',
+          curvature: 0.15,
+        });
+      }
+    });
+
+    const inferred = forceAtlas2.inferSettings(graph);
+    forceAtlas2.assign(graph, {
+      iterations: 120,
+      settings: {
+        ...inferred,
+        gravity: 2,
+        scalingRatio: 20,
+        barnesHutOptimize: false,
+        adjustSizes: true,
+      },
+    });
+
+    noverlap.assign(graph, {
+      maxIterations: 30,
+      settings: { ratio: 1.8, margin: 30 },
+    });
+
+    const padding = 60;
+    let minX = Infinity,
+      maxX = -Infinity,
+      minY = Infinity,
+      maxY = -Infinity;
+    graph.forEachNode((node) => {
+      const x = graph.getNodeAttribute(node, 'x');
+      const y = graph.getNodeAttribute(node, 'y');
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    });
+
+    const scaleX = (canvasW - padding * 2) / (maxX - minX || 1);
+    const scaleY = (canvasH - padding * 2) / (maxY - minY || 1);
+    const scale = Math.min(scaleX, scaleY);
+
+    graph.forEachNode((node) => {
+      const x = graph.getNodeAttribute(node, 'x');
+      const y = graph.getNodeAttribute(node, 'y');
+      graph.setNodeAttribute(node, 'x', (x - minX) * scale + padding);
+      graph.setNodeAttribute(node, 'y', (y - minY) * scale + padding);
+    });
+
+    import('sigma').then(({ default: Sigma }) => {
+      import('@sigma/edge-curve').then(({ default: EdgeCurveProgram }) => {
+        if (!containerRef.current) return;
+
+        const sigma = new Sigma(graph, containerRef.current, {
+          renderLabels: true,
+          labelFont: 'system-ui, -apple-system, sans-serif',
+          labelSize: 13,
+          labelWeight: '600',
+          labelColor: { color: '#374151' },
+          labelRenderedSizeThreshold: 5,
+          labelDensity: 0.5,
+          labelGridCellSize: 80,
+          renderEdgeLabels: showLabelsRef.current,
+          defaultEdgeType: 'curved',
+          edgeProgramClasses: { curved: EdgeCurveProgram },
+          defaultEdgeColor: '#d1d5db',
+          hideEdgesOnMove: false,
+          minCameraRatio: 0.3,
+          maxCameraRatio: 4,
+          zIndex: true,
+          stagePadding: 40,
+
+          nodeReducer: (nid: string, attrs: Record<string, unknown>) => {
+            const out = { ...attrs };
+            const sel = selRef.current;
+            const origClr = attrs.color as string;
+            const origSize = attrs.size as number;
+
+            if (sel) {
+              if (nid === sel.data.id) {
+                return { ...out, size: origSize * 2, highlighted: true, zIndex: 3 };
+              }
+              const isNeighbor = graph.hasNode(nid) && graph.neighbors(sel.data.id).includes(nid);
+              if (isNeighbor) {
+                return { ...out, size: origSize * 1.4, zIndex: 2 };
+              }
+              return {
+                ...out,
+                color: fadeToWhite(origClr, 0.25),
+                size: origSize * 0.6,
+                label: '',
+                zIndex: 0,
+              };
+            }
+
+            if (isRunningRef.current) {
+              const rawData = attrs.rawData as Agent | undefined;
+              if (rawData?.status === 'analyzing') {
+                return {
+                  ...out,
+                  color: '#F59E0B',
+                  size: origSize * 1.5,
+                  highlighted: true,
+                  zIndex: 2,
+                };
+              }
+              if (rawData?.status === 'done') {
+                return { ...out, color: '#10B981', size: origSize * 1.2, zIndex: 1 };
+              }
+            }
+
+            return out;
+          },
+
+          edgeReducer: (eid: string, attrs: Record<string, unknown>) => {
+            const out = { ...attrs };
+            const sel = selRef.current;
+
+            if (sel) {
+              const src = graph.source(eid);
+              const tgt = graph.target(eid);
+              if (src === sel.data.id || tgt === sel.data.id) {
+                return { ...out, color: darken(sel.color, 1.2), size: 3, zIndex: 2 };
+              }
+              return { ...out, color: '#f3f4f6', size: 0.3, zIndex: 0 };
+            }
+
+            return out;
+          },
+
+          defaultDrawNodeHover: (ctx: CanvasRenderingContext2D, d: any) => {
+            const label = d.label as string | undefined;
+            if (!label) return;
+            ctx.font = '600 12px system-ui, -apple-system, sans-serif';
+            const tw = ctx.measureText(label).width;
+            const ns = (d.size as number) || 10;
+            const px = 10,
+              py = 5;
+            const w = tw + px * 2;
+            const h = 14 + py * 2;
+            const cx = d.x as number;
+            const cy = (d.y as number) - ns - 14;
+
+            ctx.fillStyle = '#fff';
+            ctx.shadowColor = 'rgba(0,0,0,0.12)';
+            ctx.shadowBlur = 8;
+            ctx.beginPath();
+            ctx.roundRect(cx - w / 2, cy - h / 2, w, h, 6);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+            ctx.strokeStyle = (d.color as string) || '#3b82f6';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+            ctx.fillStyle = '#111827';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(label, cx, cy);
+
+            ctx.beginPath();
+            ctx.arc(d.x as number, d.y as number, ns + 6, 0, Math.PI * 2);
+            ctx.strokeStyle = (d.color as string) || '#3b82f6';
+            ctx.lineWidth = 2;
+            ctx.globalAlpha = 0.25;
+            ctx.stroke();
+            ctx.globalAlpha = 1;
+          },
+        });
+
+        sigmaRef.current = sigma;
+        setTimeout(() => sigma.refresh(), 100);
+
+        sigma.on('clickNode', ({ node }: { node: string }) => {
+          const attrs = graph.getNodeAttributes(node);
+          const rawData = attrs.rawData as Agent;
+          const color = attrs.color as string;
+          if (selRef.current?.data.id === node) {
+            setSelectedItem(null);
+          } else {
+            setSelectedItem({ type: 'node', data: rawData, color });
+          }
+        });
+
+        sigma.on('clickStage', () => {
+          setSelectedItem(null);
+        });
+        sigma.on('enterNode', () => {
+          container.style.cursor = 'pointer';
+        });
+        sigma.on('leaveNode', () => {
+          container.style.cursor = 'default';
+        });
+      });
+    });
+  }
 
   return (
     <div
-      ref={containerRef}
       style={{
         width: '100%',
         height: '100%',
@@ -590,33 +503,37 @@ export default function SwarmVisualization({
         background: '#FAFAFA',
         borderRadius: '8px',
         overflow: 'hidden',
-        backgroundImage: 'radial-gradient(#D0D0D0 1.5px, transparent 1.5px)',
-        backgroundSize: '24px 24px',
       }}
     >
-      <svg
-        ref={svgRef}
+      <div
         style={{
-          display: 'block',
-          width: '100%',
-          height: '100%',
+          position: 'absolute',
+          inset: 0,
+          pointerEvents: 'none',
+          zIndex: 0,
+          backgroundImage: 'radial-gradient(#d1d5db 1px, transparent 1px)',
+          backgroundSize: '24px 24px',
         }}
+      />
+      <div
+        ref={containerRef}
+        style={{ width: '100%', height: '100%', position: 'relative', zIndex: 1 }}
       />
 
       {/* Edge Labels Toggle */}
       <div
         style={{
           position: 'absolute',
-          top: '16px',
-          right: '16px',
+          top: '12px',
+          right: '12px',
           display: 'flex',
           alignItems: 'center',
           gap: '8px',
           background: '#FFF',
-          padding: '8px 12px',
+          padding: '6px 12px',
           borderRadius: '20px',
-          border: '1px solid #E0E0E0',
-          boxShadow: '0 2px 8px rgba(0,0,0,0.04)',
+          border: '1px solid #E5E7EB',
+          boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
           zIndex: 10,
         }}
       >
@@ -624,15 +541,18 @@ export default function SwarmVisualization({
           style={{
             position: 'relative',
             display: 'inline-block',
-            width: '40px',
-            height: '22px',
+            width: '36px',
+            height: '20px',
             cursor: 'pointer',
           }}
         >
           <input
             type="checkbox"
             checked={showEdgeLabels}
-            onChange={(e) => setShowEdgeLabels(e.target.checked)}
+            onChange={(e) => {
+              setShowEdgeLabels(e.target.checked);
+              showLabelsRef.current = e.target.checked;
+            }}
             style={{ opacity: 0, width: 0, height: 0 }}
           />
           <span
@@ -643,18 +563,17 @@ export default function SwarmVisualization({
               left: 0,
               right: 0,
               bottom: 0,
-              backgroundColor: showEdgeLabels ? '#2563EB' : '#E0E0E0',
-              borderRadius: '22px',
+              backgroundColor: showEdgeLabels ? '#2563EB' : '#D1D5DB',
+              borderRadius: '20px',
               transition: '0.3s',
             }}
           >
             <span
               style={{
                 position: 'absolute',
-                content: '""',
-                height: '16px',
-                width: '16px',
-                left: showEdgeLabels ? '21px' : '3px',
+                height: '14px',
+                width: '14px',
+                left: showEdgeLabels ? '18px' : '3px',
                 bottom: '3px',
                 backgroundColor: 'white',
                 borderRadius: '50%',
@@ -663,7 +582,7 @@ export default function SwarmVisualization({
             />
           </span>
         </label>
-        <span style={{ fontSize: '12px', color: '#666' }}>Show Labels</span>
+        <span style={{ fontSize: '11px', color: '#6B7280', fontWeight: 500 }}>Labels</span>
       </div>
 
       {/* Running Indicator */}
@@ -671,29 +590,27 @@ export default function SwarmVisualization({
         <div
           style={{
             position: 'absolute',
-            bottom: '20px',
+            bottom: '16px',
             left: '50%',
             transform: 'translateX(-50%)',
-            background: 'rgba(0, 0, 0, 0.65)',
+            background: 'rgba(0,0,0,0.7)',
             backdropFilter: 'blur(8px)',
             color: '#fff',
-            padding: '10px 20px',
-            borderRadius: '30px',
-            fontSize: '13px',
+            padding: '8px 18px',
+            borderRadius: '20px',
+            fontSize: '12px',
             display: 'flex',
             alignItems: 'center',
-            gap: '10px',
-            boxShadow: '0 4px 20px rgba(0, 0, 0, 0.15)',
-            border: '1px solid rgba(255, 255, 255, 0.1)',
+            gap: '8px',
+            boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
             fontWeight: 500,
-            letterSpacing: '0.5px',
             zIndex: 100,
           }}
         >
           <div
             style={{
-              width: '8px',
-              height: '8px',
+              width: '7px',
+              height: '7px',
               borderRadius: '50%',
               background: '#4CAF50',
               animation: 'pulse 1.5s ease-in-out infinite',
@@ -707,45 +624,45 @@ export default function SwarmVisualization({
       <div
         style={{
           position: 'absolute',
-          bottom: '20px',
-          left: '20px',
+          bottom: '16px',
+          left: '14px',
           background: 'rgba(255,255,255,0.95)',
-          padding: '12px 16px',
+          padding: '10px 14px',
           borderRadius: '8px',
-          border: '1px solid #EAEAEA',
-          boxShadow: '0 4px 16px rgba(0,0,0,0.06)',
+          border: '1px solid #E5E7EB',
+          boxShadow: '0 2px 8px rgba(0,0,0,0.04)',
           zIndex: 10,
         }}
       >
         <span
           style={{
             display: 'block',
-            fontSize: '11px',
-            fontWeight: 600,
+            fontSize: '10px',
+            fontWeight: 700,
             color: '#2563EB',
-            marginBottom: '10px',
+            marginBottom: '8px',
             textTransform: 'uppercase',
             letterSpacing: '0.5px',
           }}
         >
-          Agent Types
+          Agents
         </span>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
           {agents.map((agent) => (
             <div
               key={agent.id}
               style={{
                 display: 'flex',
                 alignItems: 'center',
-                gap: '8px',
-                fontSize: '12px',
+                gap: '7px',
+                fontSize: '11px',
                 color: '#555',
               }}
             >
               <span
                 style={{
-                  width: '10px',
-                  height: '10px',
+                  width: '9px',
+                  height: '9px',
                   borderRadius: '50%',
                   background: agent.color,
                   flexShrink: 0,
@@ -755,6 +672,71 @@ export default function SwarmVisualization({
             </div>
           ))}
         </div>
+        <div style={{ height: 6 }} />
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '7px',
+            fontSize: '10px',
+            color: '#888',
+          }}
+        >
+          <div
+            style={{
+              width: '14px',
+              height: '2px',
+              background: '#3b82f6',
+              borderRadius: 1,
+              flexShrink: 0,
+            }}
+          />
+          <span>Data Flow</span>
+        </div>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '7px',
+            fontSize: '10px',
+            color: '#888',
+            marginTop: 3,
+          }}
+        >
+          <div
+            style={{
+              width: '14px',
+              height: '2px',
+              background: '#8b5cf6',
+              borderRadius: 1,
+              flexShrink: 0,
+            }}
+          />
+          <span>Sync</span>
+        </div>
+        {showMarketNodes && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '7px',
+              fontSize: '10px',
+              color: '#888',
+              marginTop: 3,
+            }}
+          >
+            <div
+              style={{
+                width: '14px',
+                height: '2px',
+                background: '#F59E0B',
+                borderRadius: 1,
+                flexShrink: 0,
+              }}
+            />
+            <span>Market Feed</span>
+          </div>
+        )}
       </div>
 
       {/* Detail Panel */}
@@ -762,14 +744,14 @@ export default function SwarmVisualization({
         <div
           style={{
             position: 'absolute',
-            top: '60px',
-            right: '20px',
-            width: '280px',
-            maxHeight: 'calc(100% - 100px)',
+            top: '48px',
+            right: '12px',
+            width: '270px',
+            maxHeight: 'calc(100% - 70px)',
             background: '#FFF',
-            border: '1px solid #EAEAEA',
+            border: '1px solid #E5E7EB',
             borderRadius: '10px',
-            boxShadow: '0 8px 32px rgba(0,0,0,0.1)',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.08)',
             overflow: 'hidden',
             fontSize: '13px',
             zIndex: 20,
@@ -777,175 +759,330 @@ export default function SwarmVisualization({
             flexDirection: 'column',
           }}
         >
-          {/* Header */}
           <div
             style={{
               display: 'flex',
               justifyContent: 'space-between',
               alignItems: 'center',
-              padding: '14px 16px',
+              padding: '12px 14px',
               background: '#FAFAFA',
-              borderBottom: '1px solid #EEE',
+              borderBottom: '1px solid #F0F0F0',
             }}
           >
-            <span style={{ fontWeight: 600, color: '#333', fontSize: '14px' }}>Agent Details</span>
+            <span style={{ fontWeight: 700, color: '#111827', fontSize: '13px' }}>
+              {selectedItem.type === 'market' ? 'Market Data' : 'Agent Details'}
+            </span>
             <span
               style={{
-                padding: '4px 10px',
+                padding: '3px 10px',
                 borderRadius: '12px',
-                fontSize: '11px',
-                fontWeight: 500,
+                fontSize: '10px',
+                fontWeight: 600,
                 background: selectedItem.color,
                 color: '#fff',
               }}
             >
-              {selectedItem.data.role}
+              {selectedItem.type === 'market'
+                ? (selectedItem.data as MarketNode).symbol
+                : (selectedItem.data as Agent).role}
             </span>
             <button
               onClick={() => setSelectedItem(null)}
               style={{
                 background: 'none',
                 border: 'none',
-                fontSize: '20px',
+                fontSize: '18px',
                 cursor: 'pointer',
-                color: '#999',
+                color: '#9CA3AF',
                 lineHeight: 1,
-                padding: '0 4px',
+                padding: '0 2px',
               }}
             >
-              ×
+              &times;
             </button>
           </div>
 
-          {/* Content */}
-          <div style={{ padding: '16px', overflowY: 'auto' }}>
-            {/* Name */}
-            <div style={{ marginBottom: '12px' }}>
-              <span style={{ color: '#888', fontSize: '12px', fontWeight: 500 }}>Name: </span>
-              <span style={{ color: '#333', fontWeight: 600 }}>{selectedItem.data.name}</span>
-            </div>
-
-            {/* ID */}
-            <div style={{ marginBottom: '12px' }}>
-              <span style={{ color: '#888', fontSize: '12px', fontWeight: 500 }}>ID: </span>
-              <span style={{ color: '#666', fontFamily: 'monospace', fontSize: '11px' }}>
-                {selectedItem.data.id}
-              </span>
-            </div>
-
-            {/* Status */}
-            <div style={{ marginBottom: '12px' }}>
-              <span style={{ color: '#888', fontSize: '12px', fontWeight: 500 }}>Status: </span>
-              <span
-                style={{
-                  color: getStatusColor(selectedItem.data.status),
-                  fontWeight: 600,
-                  textTransform: 'capitalize',
-                }}
-              >
-                {selectedItem.data.status}
-              </span>
-            </div>
-
-            {/* Decision */}
-            {selectedItem.data.decision && (
-              <div style={{ marginBottom: '12px' }}>
-                <span style={{ color: '#888', fontSize: '12px', fontWeight: 500 }}>Decision: </span>
-                <span
-                  style={{
-                    fontWeight: 700,
-                    color:
-                      selectedItem.data.decision === 'BUY'
-                        ? '#10B981'
-                        : selectedItem.data.decision === 'SELL'
-                          ? '#EF4444'
-                          : '#6B7280',
-                  }}
-                >
-                  {selectedItem.data.decision}
-                </span>
-              </div>
-            )}
-
-            {/* Confidence */}
-            {selectedItem.data.confidence && (
-              <div style={{ marginBottom: '12px' }}>
-                <span style={{ color: '#888', fontSize: '12px', fontWeight: 500 }}>
-                  Confidence:{' '}
-                </span>
-                <span style={{ color: '#333' }}>{selectedItem.data.confidence}%</span>
-              </div>
-            )}
-
-            {/* Reasoning */}
-            {selectedItem.data.reasoning && (
-              <div
-                style={{
-                  marginTop: '16px',
-                  paddingTop: '14px',
-                  borderTop: '1px solid #F0F0F0',
-                }}
-              >
-                <div
-                  style={{ fontSize: '12px', fontWeight: 600, color: '#666', marginBottom: '10px' }}
-                >
-                  Reasoning:
-                </div>
-                <div style={{ lineHeight: 1.6, color: '#444', fontSize: '12px' }}>
-                  {selectedItem.data.reasoning}
-                </div>
-              </div>
-            )}
-
-            {/* Created At */}
-            {selectedItem.data.createdAt && (
-              <div style={{ marginTop: '12px' }}>
-                <span style={{ color: '#888', fontSize: '12px', fontWeight: 500 }}>Created: </span>
-                <span style={{ color: '#333' }}>{formatDateTime(selectedItem.data.createdAt)}</span>
-              </div>
-            )}
-
-            {/* Attributes */}
-            {selectedItem.data.attributes &&
-              Object.keys(selectedItem.data.attributes).length > 0 && (
-                <div
-                  style={{
-                    marginTop: '16px',
-                    paddingTop: '14px',
-                    borderTop: '1px solid #F0F0F0',
-                  }}
-                >
-                  <div
-                    style={{
-                      fontSize: '12px',
-                      fontWeight: 600,
-                      color: '#666',
-                      marginBottom: '10px',
-                    }}
-                  >
-                    Properties:
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    {Object.entries(selectedItem.data.attributes).map(([key, value]) => (
-                      <div key={key} style={{ display: 'flex', gap: '8px' }}>
-                        <span style={{ color: '#888', fontWeight: 500, minWidth: '80px' }}>
-                          {key}:
-                        </span>
-                        <span style={{ color: '#333' }}>{String(value) || 'None'}</span>
+          {selectedItem.type === 'market' ? (
+            <div style={{ padding: '14px' }}>
+              {(() => {
+                const m = selectedItem.data as MarketNode;
+                const fundingRate = m.funding ? parseFloat(m.funding) * 100 : null;
+                const nextFundingRate = m.nextFunding ? parseFloat(m.nextFunding) * 100 : null;
+                const vol = m.volume24h ? parseFloat(m.volume24h) : null;
+                const oi = m.openInterest ? parseFloat(m.openInterest) : null;
+                const formatBigNum = (n: number) =>
+                  n >= 1e9
+                    ? `$${(n / 1e9).toFixed(2)}B`
+                    : n >= 1e6
+                      ? `$${(n / 1e6).toFixed(2)}M`
+                      : n >= 1e3
+                        ? `$${(n / 1e3).toFixed(1)}K`
+                        : `$${n.toFixed(2)}`;
+                return (
+                  <>
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'baseline',
+                        gap: 8,
+                        marginBottom: 6,
+                      }}
+                    >
+                      <span style={{ color: '#111827', fontWeight: 800, fontSize: '18px' }}>
+                        {m.price}
+                      </span>
+                      <span
+                        style={{
+                          fontWeight: 700,
+                          fontSize: '12px',
+                          color: m.change.startsWith('+') ? '#10B981' : '#EF4444',
+                          background: m.change.startsWith('+') ? '#F0FDF4' : '#FEF2F2',
+                          padding: '2px 6px',
+                          borderRadius: 4,
+                        }}
+                      >
+                        {m.change}
+                      </span>
+                    </div>
+                    <div
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: '1fr 1fr',
+                        gap: '8px 12px',
+                        marginTop: 10,
+                      }}
+                    >
+                      <div>
+                        <div style={{ color: '#9CA3AF', fontSize: '10px', fontWeight: 500 }}>
+                          Mark Price
+                        </div>
+                        <div style={{ color: '#111827', fontWeight: 600, fontSize: '12px' }}>
+                          {m.markPrice ? `$${parseFloat(m.markPrice).toFixed(2)}` : '-'}
+                        </div>
                       </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-          </div>
+                      <div>
+                        <div style={{ color: '#9CA3AF', fontSize: '10px', fontWeight: 500 }}>
+                          Oracle
+                        </div>
+                        <div style={{ color: '#111827', fontWeight: 600, fontSize: '12px' }}>
+                          {m.oraclePrice ? `$${parseFloat(m.oraclePrice).toFixed(2)}` : '-'}
+                        </div>
+                      </div>
+                      <div>
+                        <div style={{ color: '#9CA3AF', fontSize: '10px', fontWeight: 500 }}>
+                          Funding Rate
+                        </div>
+                        <div
+                          style={{
+                            fontWeight: 600,
+                            fontSize: '12px',
+                            color: fundingRate !== null && fundingRate >= 0 ? '#10B981' : '#EF4444',
+                          }}
+                        >
+                          {fundingRate !== null
+                            ? `${fundingRate >= 0 ? '+' : ''}${fundingRate.toFixed(4)}%`
+                            : '-'}
+                        </div>
+                      </div>
+                      <div>
+                        <div style={{ color: '#9CA3AF', fontSize: '10px', fontWeight: 500 }}>
+                          Next Funding
+                        </div>
+                        <div
+                          style={{
+                            fontWeight: 600,
+                            fontSize: '12px',
+                            color:
+                              nextFundingRate !== null && nextFundingRate >= 0
+                                ? '#10B981'
+                                : '#EF4444',
+                          }}
+                        >
+                          {nextFundingRate !== null
+                            ? `${nextFundingRate >= 0 ? '+' : ''}${nextFundingRate.toFixed(4)}%`
+                            : '-'}
+                        </div>
+                      </div>
+                      <div>
+                        <div style={{ color: '#9CA3AF', fontSize: '10px', fontWeight: 500 }}>
+                          Volume 24h
+                        </div>
+                        <div style={{ color: '#111827', fontWeight: 600, fontSize: '12px' }}>
+                          {vol !== null ? formatBigNum(vol) : '-'}
+                        </div>
+                      </div>
+                      <div>
+                        <div style={{ color: '#9CA3AF', fontSize: '10px', fontWeight: 500 }}>
+                          Open Interest
+                        </div>
+                        <div style={{ color: '#111827', fontWeight: 600, fontSize: '12px' }}>
+                          {oi !== null ? formatBigNum(oi) : '-'}
+                        </div>
+                      </div>
+                    </div>
+                    <div
+                      style={{
+                        marginTop: 12,
+                        padding: '8px 10px',
+                        background: '#EFF6FF',
+                        borderRadius: 6,
+                        fontSize: '10px',
+                        color: '#2563EB',
+                        fontWeight: 500,
+                      }}
+                    >
+                      Live data from Pacifica API
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+          ) : (
+            <div style={{ padding: '14px', overflowY: 'auto' }}>
+              {(() => {
+                const a = selectedItem.data as Agent;
+                return (
+                  <>
+                    <div style={{ marginBottom: '10px' }}>
+                      <span style={{ color: '#9CA3AF', fontSize: '11px', fontWeight: 500 }}>
+                        Name:{' '}
+                      </span>
+                      <span style={{ color: '#111827', fontWeight: 600 }}>{a.name}</span>
+                    </div>
+                    <div style={{ marginBottom: '10px' }}>
+                      <span style={{ color: '#9CA3AF', fontSize: '11px', fontWeight: 500 }}>
+                        ID:{' '}
+                      </span>
+                      <span style={{ color: '#6B7280', fontFamily: 'monospace', fontSize: '10px' }}>
+                        {a.id}
+                      </span>
+                    </div>
+                    <div style={{ marginBottom: '10px' }}>
+                      <span style={{ color: '#9CA3AF', fontSize: '11px', fontWeight: 500 }}>
+                        Status:{' '}
+                      </span>
+                      <span
+                        style={{
+                          color: STATUS_COLORS[a.status] || STATUS_COLORS.idle,
+                          fontWeight: 700,
+                          textTransform: 'uppercase',
+                          fontSize: '11px',
+                        }}
+                      >
+                        {a.status}
+                      </span>
+                    </div>
+                    {a.decision && (
+                      <div style={{ marginBottom: '10px' }}>
+                        <span style={{ color: '#9CA3AF', fontSize: '11px', fontWeight: 500 }}>
+                          Decision:{' '}
+                        </span>
+                        <span
+                          style={{
+                            fontWeight: 800,
+                            fontSize: '14px',
+                            color:
+                              a.decision === 'BUY'
+                                ? '#10B981'
+                                : a.decision === 'SELL'
+                                  ? '#EF4444'
+                                  : '#6B7280',
+                          }}
+                        >
+                          {a.decision}
+                        </span>
+                      </div>
+                    )}
+                    {a.confidence && (
+                      <div style={{ marginBottom: '10px' }}>
+                        <span style={{ color: '#9CA3AF', fontSize: '11px', fontWeight: 500 }}>
+                          Confidence:{' '}
+                        </span>
+                        <span style={{ color: '#111827', fontWeight: 600 }}>{a.confidence}%</span>
+                      </div>
+                    )}
+                    {a.reasoning && (
+                      <div
+                        style={{
+                          marginTop: '12px',
+                          paddingTop: '12px',
+                          borderTop: '1px solid #F0F0F0',
+                        }}
+                      >
+                        <div
+                          style={{
+                            fontSize: '11px',
+                            fontWeight: 600,
+                            color: '#6B7280',
+                            marginBottom: '6px',
+                          }}
+                        >
+                          Reasoning:
+                        </div>
+                        <div style={{ lineHeight: 1.6, color: '#374151', fontSize: '12px' }}>
+                          {a.reasoning}
+                        </div>
+                      </div>
+                    )}
+                    {a.createdAt && (
+                      <div style={{ marginTop: '10px' }}>
+                        <span style={{ color: '#9CA3AF', fontSize: '11px', fontWeight: 500 }}>
+                          Created:{' '}
+                        </span>
+                        <span style={{ color: '#374151' }}>{formatDateTime(a.createdAt)}</span>
+                      </div>
+                    )}
+                    {a.attributes && Object.keys(a.attributes).length > 0 && (
+                      <div
+                        style={{
+                          marginTop: '12px',
+                          paddingTop: '12px',
+                          borderTop: '1px solid #F0F0F0',
+                        }}
+                      >
+                        <div
+                          style={{
+                            fontSize: '11px',
+                            fontWeight: 600,
+                            color: '#6B7280',
+                            marginBottom: '6px',
+                          }}
+                        >
+                          Properties:
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                          {Object.entries(a.attributes).map(([key, value]) => (
+                            <div key={key} style={{ display: 'flex', gap: '6px' }}>
+                              <span
+                                style={{
+                                  color: '#9CA3AF',
+                                  fontWeight: 500,
+                                  minWidth: '70px',
+                                  fontSize: '11px',
+                                }}
+                              >
+                                {key}:
+                              </span>
+                              <span style={{ color: '#374151', fontSize: '11px' }}>
+                                {String(value) || 'None'}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
+            </div>
+          )}
         </div>
       )}
 
-      {/* CSS Animation */}
       <style>{`
         @keyframes pulse {
           0%, 100% { opacity: 1; transform: scale(1); }
-          50% { opacity: 0.5; transform: scale(1.1); }
+          50% { opacity: 0.5; transform: scale(1.2); }
         }
       `}</style>
     </div>
