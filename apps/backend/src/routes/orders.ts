@@ -1,18 +1,31 @@
 import { Hono } from 'hono';
 import { PacificaClient } from '../services/pacifica';
-import { SwarmCoordinator } from '@pacfi/ai-swarm';
+import { SwarmCoordinator } from '../services/swarm';
 import { getWalletContext } from '../middleware/auth';
 import { db } from '../db';
-import { trades } from '../db/schema';
+import { trades, users } from '../db/schema';
+import { eq } from 'drizzle-orm';
 
 const router = new Hono();
 const pacificaClient = new PacificaClient();
 const swarmCoordinator = new SwarmCoordinator();
 
-/**
- * POST /orders/create-market
- * Create market order with signed request
- */
+async function ensureUser(walletAddress: string): Promise<string> {
+  const existing = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.walletAddress, walletAddress))
+    .limit(1);
+
+  if (existing.length > 0) {
+    return existing[0].id;
+  }
+
+  const [created] = await db.insert(users).values({ walletAddress }).returning({ id: users.id });
+
+  return created.id;
+}
+
 router.post('/create-market', async (c) => {
   try {
     const wallet = getWalletContext(c);
@@ -28,7 +41,6 @@ router.post('/create-market', async (c) => {
       return c.json({ error: 'Missing required fields' }, 400);
     }
 
-    // Send to Pacifica API
     const order = await pacificaClient.createMarketOrder(
       wallet.walletAddress,
       symbol,
@@ -39,37 +51,25 @@ router.post('/create-market', async (c) => {
       builderCode
     );
 
-    // Store in database
+    const userId = await ensureUser(wallet.walletAddress);
+
     await db.insert(trades).values({
-      userId: wallet.walletAddress, // Use wallet address as user ID
+      userId,
       symbol,
       side: side === 'bid' ? 'BUY' : 'SELL',
-      entryPrice: parseFloat(order.entryPrice || '0'),
-      size: parseFloat(amount),
-      leverage: parseFloat(body.leverage || '1'),
+      entryPrice: String(parseFloat((order as any).entryPrice || '0')),
+      size: String(parseFloat(amount)),
+      leverage: String(parseFloat(body.leverage || '1')),
       status: 'OPEN',
-      executedAt: new Date(),
     });
 
-    return c.json({
-      success: true,
-      order,
-    });
+    return c.json({ success: true, order });
   } catch (error) {
     console.error('[Orders] Error creating market order:', error);
-    return c.json(
-      {
-        error: error instanceof Error ? error.message : 'Unknown error',
-      },
-      500
-    );
+    return c.json({ error: error instanceof Error ? error.message : 'Unknown error' }, 500);
   }
 });
 
-/**
- * POST /orders/create-limit
- * Create limit order with signed request
- */
 router.post('/create-limit', async (c) => {
   try {
     const wallet = getWalletContext(c);
@@ -85,7 +85,6 @@ router.post('/create-limit', async (c) => {
       return c.json({ error: 'Missing required fields' }, 400);
     }
 
-    // Send to Pacifica API
     const order = await pacificaClient.createLimitOrder(
       wallet.walletAddress,
       symbol,
@@ -97,37 +96,25 @@ router.post('/create-limit', async (c) => {
       builderCode
     );
 
-    // Store in database
+    const userId = await ensureUser(wallet.walletAddress);
+
     await db.insert(trades).values({
-      userId: wallet.walletAddress,
+      userId,
       symbol,
       side: side === 'bid' ? 'BUY' : 'SELL',
-      entryPrice: parseFloat(price),
-      size: parseFloat(amount),
-      leverage: parseFloat(body.leverage || '1'),
+      entryPrice: String(parseFloat(price)),
+      size: String(parseFloat(amount)),
+      leverage: String(parseFloat(body.leverage || '1')),
       status: 'OPEN',
-      executedAt: new Date(),
     });
 
-    return c.json({
-      success: true,
-      order,
-    });
+    return c.json({ success: true, order });
   } catch (error) {
     console.error('[Orders] Error creating limit order:', error);
-    return c.json(
-      {
-        error: error instanceof Error ? error.message : 'Unknown error',
-      },
-      500
-    );
+    return c.json({ error: error instanceof Error ? error.message : 'Unknown error' }, 500);
   }
 });
 
-/**
- * GET /orders/positions
- * Get user positions
- */
 router.get('/positions', async (c) => {
   try {
     const wallet = getWalletContext(c);
@@ -138,25 +125,13 @@ router.get('/positions', async (c) => {
 
     const positions = await pacificaClient.getPositions(wallet.walletAddress);
 
-    return c.json({
-      success: true,
-      positions,
-    });
+    return c.json({ success: true, positions });
   } catch (error) {
     console.error('[Orders] Error fetching positions:', error);
-    return c.json(
-      {
-        error: error instanceof Error ? error.message : 'Unknown error',
-      },
-      500
-    );
+    return c.json({ error: error instanceof Error ? error.message : 'Unknown error' }, 500);
   }
 });
 
-/**
- * GET /orders/balance
- * Get user balance
- */
 router.get('/balance', async (c) => {
   try {
     const wallet = getWalletContext(c);
@@ -167,18 +142,10 @@ router.get('/balance', async (c) => {
 
     const balance = await pacificaClient.getBalance(wallet.walletAddress);
 
-    return c.json({
-      success: true,
-      balance,
-    });
+    return c.json({ success: true, balance });
   } catch (error) {
     console.error('[Orders] Error fetching balance:', error);
-    return c.json(
-      {
-        error: error instanceof Error ? error.message : 'Unknown error',
-      },
-      500
-    );
+    return c.json({ error: error instanceof Error ? error.message : 'Unknown error' }, 500);
   }
 });
 
