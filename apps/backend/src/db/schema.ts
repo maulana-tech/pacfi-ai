@@ -15,17 +15,14 @@ export const users = pgTable(
   'users',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    email: varchar('email', { length: 255 }).unique().notNull(),
-    username: varchar('username', { length: 100 }).unique().notNull(),
-    passwordHash: varchar('password_hash', { length: 255 }).notNull(),
-    pacificaApiKey: text('pacifica_api_key'),
-    pacificaApiSecret: text('pacifica_api_secret'),
+    walletAddress: varchar('wallet_address', { length: 44 }).unique().notNull(),
+    username: varchar('username', { length: 100 }).unique(),
     riskProfile: varchar('risk_profile', { length: 50 }).default('MODERATE'),
     createdAt: timestamp('created_at').defaultNow(),
     updatedAt: timestamp('updated_at').defaultNow(),
   },
   (table) => ({
-    emailIdx: index('idx_email').on(table.email),
+    walletIdx: index('idx_wallet_address').on(table.walletAddress),
     usernameIdx: index('idx_username').on(table.username),
   })
 );
@@ -145,21 +142,14 @@ export const strategies = pgTable(
   })
 );
 
-// Relations
 export const usersRelations = relations(users, ({ one, many }) => ({
-  portfolio: one(portfolios, {
-    fields: [users.id],
-    references: [portfolios.userId],
-  }),
+  portfolio: one(portfolios, { fields: [users.id], references: [portfolios.userId] }),
   trades: many(trades),
   aiLogs: many(aiLogs),
   strategies: many(strategies),
 }));
 
 export const tradesRelations = relations(trades, ({ one, many }) => ({
-  user: one(users, {
-    fields: [trades.userId],
-    references: [users.id],
-  }),
+  user: one(users, { fields: [trades.userId], references: [users.id] }),
   aiLogs: many(aiLogs),
 }));
