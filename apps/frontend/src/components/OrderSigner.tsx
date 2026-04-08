@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useWallet } from './WalletConnect';
+import { useWalletContext } from './WalletConnect';
 
 interface OrderSignerProps {
   onOrderSigned?: (signedOrder: any) => void;
@@ -32,7 +32,7 @@ function createCompactJson(obj: any): string {
 }
 
 export default function OrderSigner({ onOrderSigned, onError }: OrderSignerProps) {
-  const { walletAddress, isConnected, signMessage } = useWallet();
+  const { walletAddress, isConnected, signMessage } = useWalletContext();
   const [isLoading, setIsLoading] = useState(false);
   const [orderData, setOrderData] = useState({
     symbol: 'BTC',
@@ -166,11 +166,7 @@ export default function OrderSigner({ onOrderSigned, onError }: OrderSignerProps
             />
           </div>
 
-          <button
-            onClick={handleSignOrder}
-            disabled={isLoading}
-            className="sign-btn"
-          >
+          <button onClick={handleSignOrder} disabled={isLoading} className="sign-btn">
             {isLoading ? 'Signing...' : 'Sign & Send Order'}
           </button>
         </>
