@@ -3,6 +3,7 @@ import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import { healthRouter } from './routes/health';
 import { ordersRouter } from './routes/orders';
+import { dashboardRouter } from './routes/dashboard';
 
 const app = new Hono();
 
@@ -13,6 +14,7 @@ app.use('*', logger());
 // Routes
 app.route('/health', healthRouter);
 app.route('/orders', ordersRouter);
+app.route('/dashboard', dashboardRouter);
 
 // 404 handler
 app.notFound((c) => {
