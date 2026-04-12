@@ -40,6 +40,32 @@ const navItems = [
     ),
   },
   {
+    id: 'builder',
+    href: '/builder',
+    icon: (
+      <svg width="20" height="20" viewBox="0 0 16 16" fill="none">
+        <path
+          d="M3 8.5L8 2l5 6.5v4A1.5 1.5 0 0 1 11.5 14h-7A1.5 1.5 0 0 1 3 12.5v-4Z"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M6.25 8.25h3.5"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+        />
+        <path
+          d="M8 6.5v3.5"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+        />
+      </svg>
+    ),
+  },
+  {
     id: 'portfolio',
     href: '/portfolio',
     icon: (
