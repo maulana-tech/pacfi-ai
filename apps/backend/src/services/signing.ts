@@ -22,7 +22,7 @@ interface SignaturePayload {
   timestamp: number;
   expiry_window: number;
   type: string;
-  data: OrderData;
+  data: OrderData | Record<string, unknown>;
 }
 
 interface SignedOrder {
@@ -80,6 +80,63 @@ export class PacificaOrderSigner {
     };
 
     return payload;
+  }
+
+  static prepareMarketOrderForSigning(orderData: OrderData): SignaturePayload {
+    const timestamp = Date.now();
+
+    return {
+      timestamp,
+      expiry_window: 30000,
+      type: 'create_market_order',
+      data: orderData,
+    };
+  }
+
+  static prepareBuilderApprovalForSigning(
+    builderCode: string,
+    maxFeeRate: string,
+    expiryWindow: number = 5000
+  ): SignaturePayload {
+    return {
+      timestamp: Date.now(),
+      expiry_window: expiryWindow,
+      type: 'approve_builder_code',
+      data: {
+        builder_code: builderCode,
+        max_fee_rate: maxFeeRate,
+      },
+    };
+  }
+
+  static prepareBuilderFeeRateUpdateForSigning(
+    builderCode: string,
+    feeRate: string,
+    expiryWindow: number = 5000
+  ): SignaturePayload {
+    return {
+      timestamp: Date.now(),
+      expiry_window: expiryWindow,
+      type: 'update_builder_code_fee_rate',
+      data: {
+        builder_code: builderCode,
+        fee_rate: feeRate,
+      },
+    };
+  }
+
+  static prepareBuilderRevokeForSigning(
+    builderCode: string,
+    expiryWindow: number = 5000
+  ): SignaturePayload {
+    return {
+      timestamp: Date.now(),
+      expiry_window: expiryWindow,
+      type: 'revoke_builder_code',
+      data: {
+        builder_code: builderCode,
+      },
+    };
   }
 
   /**
