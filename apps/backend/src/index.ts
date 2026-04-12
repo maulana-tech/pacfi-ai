@@ -1,9 +1,18 @@
+import { config } from 'dotenv';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import { healthRouter } from './routes/health';
 import { ordersRouter } from './routes/orders';
 import { dashboardRouter } from './routes/dashboard';
+import { builderRouter } from './routes/builder';
+import { agentRouter } from './routes/agent';
+import { errorEnvelope } from './lib/api';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+config({ path: path.resolve(__dirname, '../../../.env') });
 
 const app = new Hono();
 
@@ -15,19 +24,19 @@ app.use('*', logger());
 app.route('/health', healthRouter);
 app.route('/orders', ordersRouter);
 app.route('/dashboard', dashboardRouter);
+app.route('/builder', builderRouter);
+app.route('/agent', agentRouter);
 
 // 404 handler
 app.notFound((c) => {
-  return c.json({ error: 'Not found' }, 404);
+  return c.json(errorEnvelope('Not found'), 404);
 });
 
 // Error handler
 app.onError((err, c) => {
   console.error('[Error]', err);
   return c.json(
-    {
-      error: 'Internal server error',
-    },
+    errorEnvelope('Internal server error'),
     500
   );
 });
