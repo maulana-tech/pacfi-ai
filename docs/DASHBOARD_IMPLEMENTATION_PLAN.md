@@ -45,6 +45,7 @@ Membangun dashboard trading yang real-time, stabil, dan siap dipakai harian untu
 4. Pastikan semua endpoint menerima konteks wallet dari header/auth yang dipakai sekarang.
 
 Deliverable:
+
 1. Endpoint backend siap dipakai frontend.
 2. Dokumen contract response singkat di docs.
 
@@ -59,6 +60,7 @@ Deliverable:
 4. Tambahkan interval refresh ringan untuk panel penting (mis. tiap 10-20 detik).
 
 Deliverable:
+
 1. Dashboard menampilkan data live.
 2. Semua panel punya state handling yang jelas.
 
@@ -70,6 +72,7 @@ Deliverable:
 4. Pastikan CTA ke halaman terkait (portfolio, leaderboard, trading) jelas.
 
 Deliverable:
+
 1. Dashboard lebih konsisten dan enak dipakai lintas device.
 
 ## Phase 4 - Performance and Reliability
@@ -80,6 +83,7 @@ Deliverable:
 4. Audit error logging frontend/backend untuk dashboard routes.
 
 Deliverable:
+
 1. Dashboard cepat dan stabil pada koneksi menengah.
 
 ## Phase 5 - Testing and Release Checklist
@@ -98,6 +102,7 @@ Deliverable:
    - network lambat
 
 Deliverable:
+
 1. Checklist rilis dashboard terpenuhi.
 2. Risiko regresi berkurang.
 
@@ -154,3 +159,66 @@ interface DashboardTrade {
 5. Phase 5
 
 Urutan ini memprioritaskan data live dulu, lalu stabilitas, baru polish UI.
+
+## Implementation Status Audit (2026-04-09)
+
+### In Scope Feature Status
+
+- [x] Summary cards: total balance, open P&L, win rate, total trades.
+- [~] Price chart + perubahan 24 jam.
+- [x] Open positions table.
+- [x] Recent trades table.
+- [x] Swarm status panel (status agent + confidence).
+- [x] Leaderboard teaser panel (top trader ringkas, link ke halaman leaderboard).
+- [x] Integrasi wallet state untuk konteks user.
+
+Keterangan:
+- `[x]` implemented end-to-end.
+- `[~]` implemented partially.
+- `[ ]` not implemented.
+
+### Phase Progress Status
+
+#### Phase 1 - Data Contract and API Readiness
+
+- [x] Payload API untuk panel dashboard didefinisikan.
+- [x] Endpoint backend tersedia: `/dashboard/summary`, `/dashboard/positions`, `/dashboard/trades`, `/dashboard/swarm-status`.
+- [x] Response envelope distandarkan (`success`, `data`, `error`, `timestamp`).
+- [x] Context wallet via header dipakai oleh endpoint dashboard utama.
+- [x] Endpoint tambahan `/dashboard/leaderboard-teaser` dan `/dashboard/leaderboard` tersedia dan tercatat di API contract doc.
+
+#### Phase 2 - Frontend Integration (Replace Mock Data)
+
+- [x] Dashboard utama fetch data live dari API.
+- [ ] Data hooks terpisah per panel (masih terpusat di `DashboardContent.tsx`).
+- [~] Loading/empty/error state sudah ada, tapi skeleton loading belum konsisten di semua panel.
+- [x] Interval refresh panel penting aktif (15 detik).
+
+#### Phase 3 - UX, Consistency, and Responsiveness
+
+- [x] Hierarchy visual panel utama sudah rapi.
+- [~] Responsiveness mobile belum tuntas (grid masih fixed `repeat(4, 1fr)` dan `1fr 320px`).
+- [x] Label timestamp "Updated" sudah ada.
+- [x] CTA ke halaman terkait (`/leaderboard`, `/portfolio`) sudah ada.
+
+#### Phase 4 - Performance and Reliability
+
+- [~] Reduksi request via cache/memoization lintas panel belum ada (hanya `useMemo` untuk stat cards).
+- [x] Pembatasan payload tabel via `limit` pada endpoint trades/leaderboard teaser.
+- [x] Timeout + retry + fallback message pada fetch call sudah ada.
+- [x] Error logging backend route dashboard sudah ada.
+
+#### Phase 5 - Testing and Release Checklist
+
+- [ ] Unit test formatter/mapper belum ditemukan.
+- [ ] Integration test dashboard load/empty/error belum ditemukan.
+- [ ] Manual QA checklist belum terdokumentasi sebagai checklist eksekusi.
+
+### Leaderboard Scope Update
+
+- [x] Halaman leaderboard menggunakan live API (bukan mock data).
+- [x] Sorting leaderboard terhubung ke query backend (`roi`, `winRate`, `trades`, `sharpe`).
+- [x] Loading, error, empty state, dan retry tersedia di halaman leaderboard.
+- [x] Top-3 leaderboard card dan tabel full leaderboard sudah konsisten memakai sumber data yang sama.
+- [x] Pagination leaderboard dengan server-side cursor (`cursor`, `nextCursor`, `hasMore`) sudah tersedia.
+- [x] Filter periode leaderboard (`all-time`, `30D`, `7D`) sudah terhubung backend + frontend.

@@ -37,6 +37,8 @@ export const getSignature = (c: any): string | null => {
 export const getWalletContext = (c: any): WalletContext | null => {
   const walletAddress = getWalletAddress(c);
   const signature = getSignature(c);
+  const timestampHeader = c.req.header('X-Timestamp');
+  const timestamp = timestampHeader ? Number.parseInt(timestampHeader, 10) : undefined;
 
   if (!walletAddress || !isValidWalletAddress(walletAddress)) {
     return null;
@@ -45,5 +47,6 @@ export const getWalletContext = (c: any): WalletContext | null => {
   return {
     walletAddress,
     signature: signature ?? undefined,
+    timestamp: Number.isFinite(timestamp) ? timestamp : undefined,
   };
 };
