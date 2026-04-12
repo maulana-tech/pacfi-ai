@@ -4,6 +4,7 @@ import { getWalletContext } from '../middleware/auth';
 import { PacificaClient } from '../services/pacifica';
 import { db } from '../db';
 import { aiLogs, leaderboard, trades, users } from '../db/schema';
+import { errorEnvelope, successEnvelope } from '../lib/api';
 
 const router = new Hono();
 const pacificaClient = new PacificaClient();
@@ -51,13 +52,6 @@ const toIso = (value: Date | string | null | undefined): string => {
   }
   return new Date(value).toISOString();
 };
-
-const withEnvelope = <T>(data: T) => ({
-  success: true,
-  data,
-  error: null,
-  timestamp: new Date().toISOString(),
-});
 
 type ComputedLeaderboardRow = {
   walletAddress: string;
@@ -215,7 +209,7 @@ router.get('/summary', async (c) => {
   try {
     const wallet = getWalletContext(c);
     if (!wallet) {
-      return c.json({ success: false, data: null, error: 'Invalid wallet address' }, 400);
+      return c.json(errorEnvelope('Invalid wallet address'), 400);
     }
 
     const [balance, positions] = await Promise.all([
@@ -252,7 +246,7 @@ router.get('/summary', async (c) => {
     const openPnlPct = balance > 0 ? (openPnl / balance) * 100 : 0;
 
     return c.json(
-      withEnvelope({
+      successEnvelope({
         totalBalance: balance,
         openPnl,
         openPnlPct,
@@ -263,7 +257,7 @@ router.get('/summary', async (c) => {
     );
   } catch (error) {
     console.error('[Dashboard] Error fetching summary:', error);
-    return c.json({ success: false, data: null, error: 'Failed to fetch dashboard summary' }, 500);
+    return c.json(errorEnvelope('Failed to fetch dashboard summary'), 500);
   }
 });
 
@@ -271,7 +265,7 @@ router.get('/positions', async (c) => {
   try {
     const wallet = getWalletContext(c);
     if (!wallet) {
-      return c.json({ success: false, data: null, error: 'Invalid wallet address' }, 400);
+      return c.json(errorEnvelope('Invalid wallet address'), 400);
     }
 
     const positions = await pacificaClient.getPositions(wallet.walletAddress);
@@ -295,10 +289,10 @@ router.get('/positions', async (c) => {
         })
       : [];
 
-    return c.json(withEnvelope(normalized));
+    return c.json(successEnvelope(normalized));
   } catch (error) {
     console.error('[Dashboard] Error fetching positions:', error);
-    return c.json({ success: false, data: null, error: 'Failed to fetch positions' }, 500);
+    return c.json(errorEnvelope('Failed to fetch positions'), 500);
   }
 });
 
@@ -306,7 +300,7 @@ router.get('/trades', async (c) => {
   try {
     const wallet = getWalletContext(c);
     if (!wallet) {
-      return c.json({ success: false, data: null, error: 'Invalid wallet address' }, 400);
+      return c.json(errorEnvelope('Invalid wallet address'), 400);
     }
 
     const limitInput = Number.parseInt(c.req.query('limit') ?? '10', 10);
@@ -318,7 +312,7 @@ router.get('/trades', async (c) => {
     });
 
     if (!userRow) {
-      return c.json(withEnvelope([]));
+      return c.json(successEnvelope([]));
     }
 
     const rows = await db
@@ -354,10 +348,10 @@ router.get('/trades', async (c) => {
       executedAt: toIso(row.executedAt),
     }));
 
-    return c.json(withEnvelope(normalized));
+    return c.json(successEnvelope(normalized));
   } catch (error) {
     console.error('[Dashboard] Error fetching trades:', error);
-    return c.json({ success: false, data: null, error: 'Failed to fetch trades' }, 500);
+    return c.json(errorEnvelope('Failed to fetch trades'), 500);
   }
 });
 
@@ -365,7 +359,7 @@ router.get('/swarm-status', async (c) => {
   try {
     const wallet = getWalletContext(c);
     if (!wallet) {
-      return c.json({ success: false, data: null, error: 'Invalid wallet address' }, 400);
+      return c.json(errorEnvelope('Invalid wallet address'), 400);
     }
 
     const userRow = await db.query.users.findFirst({
@@ -375,7 +369,7 @@ router.get('/swarm-status', async (c) => {
 
     if (!userRow) {
       return c.json(
-        withEnvelope({
+        successEnvelope({
           agents: DEFAULT_AGENTS.map((agent) => ({
             ...agent,
             status: 'idle',
@@ -437,14 +431,14 @@ router.get('/swarm-status', async (c) => {
     });
 
     return c.json(
-      withEnvelope({
+      successEnvelope({
         agents,
         lastRun: logs[0]?.timestamp ? toIso(logs[0].timestamp) : null,
       })
     );
   } catch (error) {
     console.error('[Dashboard] Error fetching swarm status:', error);
-    return c.json({ success: false, data: null, error: 'Failed to fetch swarm status' }, 500);
+    return c.json(errorEnvelope('Failed to fetch swarm status'), 500);
   }
 });
 
@@ -484,7 +478,7 @@ router.get('/leaderboard-teaser', async (c) => {
           updatedAt: row.updatedAt,
         }));
 
-      return c.json(withEnvelope(computed));
+      return c.json(successEnvelope(computed));
     }
 
     const normalized = rows.map((row, index) => ({
@@ -497,10 +491,10 @@ router.get('/leaderboard-teaser', async (c) => {
       updatedAt: toIso(row.updatedAt),
     }));
 
-    return c.json(withEnvelope(normalized));
+    return c.json(successEnvelope(normalized));
   } catch (error) {
     console.error('[Dashboard] Error fetching leaderboard teaser:', error);
-    return c.json({ success: false, data: null, error: 'Failed to fetch leaderboard teaser' }, 500);
+    return c.json(errorEnvelope('Failed to fetch leaderboard teaser'), 500);
   }
 });
 
@@ -582,7 +576,7 @@ router.get('/leaderboard', async (c) => {
       }));
 
       return c.json(
-        withEnvelope({
+        successEnvelope({
           items,
           pageInfo: {
             limit,
@@ -613,7 +607,7 @@ router.get('/leaderboard', async (c) => {
     const nextCursor = hasMore ? Buffer.from(String(nextOffset)).toString('base64url') : null;
 
     return c.json(
-      withEnvelope({
+      successEnvelope({
         items: normalized,
         pageInfo: {
           limit,
@@ -625,7 +619,7 @@ router.get('/leaderboard', async (c) => {
     );
   } catch (error) {
     console.error('[Dashboard] Error fetching leaderboard:', error);
-    return c.json({ success: false, data: null, error: 'Failed to fetch leaderboard' }, 500);
+    return c.json(errorEnvelope('Failed to fetch leaderboard'), 500);
   }
 });
 
