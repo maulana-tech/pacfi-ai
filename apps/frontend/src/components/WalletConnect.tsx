@@ -13,21 +13,29 @@ interface WalletContextType {
 }
 
 export const useWalletContext = (): WalletContextType => {
-  const { publicKey, connected, disconnect, signMessage: adapterSignMessage, wallet } = useWallet();
+  const {
+    publicKey,
+    connected,
+    connecting,
+    disconnect,
+    connect: adapterConnect,
+    signMessage: adapterSignMessage,
+    wallet,
+  } = useWallet();
   const modal = useWalletModal();
-  const [isConnecting, setIsConnecting] = useState(false);
 
   const walletAddress = publicKey ? publicKey.toBase58() : null;
   const isConnected = connected;
 
   const connect = useCallback(async (): Promise<string | null> => {
-    if (wallet) {
+    if (!wallet) {
       modal.setVisible(true);
       return null;
     }
-    modal.setVisible(true);
-    return null;
-  }, [wallet, modal]);
+
+    await adapterConnect();
+    return publicKey ? publicKey.toBase58() : null;
+  }, [wallet, modal, adapterConnect, publicKey]);
 
   const handleDisconnect = useCallback(async (): Promise<void> => {
     await disconnect();
@@ -48,7 +56,7 @@ export const useWalletContext = (): WalletContextType => {
   return {
     walletAddress,
     isConnected,
-    isConnecting,
+    isConnecting: connecting,
     connect,
     disconnect: handleDisconnect,
     signMessage,
