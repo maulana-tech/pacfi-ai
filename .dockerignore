@@ -1,0 +1,12 @@
+node_modules
+dist
+.astro
+.git
+*.log
+.env.local
+.env.*.local
+.DS_Store
+.vscode
+.idea
+*.tgz
+.cache
