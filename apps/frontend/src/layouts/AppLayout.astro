@@ -2,7 +2,6 @@
 import '../styles/global.css';
 import Sidebar from '../components/Sidebar';
 import WalletConnect from '../components/WalletConnect';
-import WalletProvider from '../components/WalletProvider';
 
 interface Props {
   title: string;
@@ -89,7 +88,6 @@ const { title, activeNav = 'dashboard' } = Astro.props;
     </style>
   </head>
   <body>
-    <WalletProvider client:only="react">
     <div class="app-shell">
       <!-- Sidebar with transition persist - won't reload on navigation -->
       <div class="sidebar-wrapper" transition:name="sidebar" transition:persist>
@@ -109,13 +107,17 @@ const { title, activeNav = 'dashboard' } = Astro.props;
         </div>
       </div>
     </div>
-    </WalletProvider>
     
     <!-- Prefetch on hover script -->
     <script>
       // Prefetch routes on link hover for instant navigation
       document.addEventListener('mouseover', (e) => {
-        const link = e.target.closest('a');
+        const target = e.target;
+        if (!(target instanceof Element)) {
+          return;
+        }
+
+        const link = target.closest('a');
         if (link && link.href && link.href.startsWith(window.location.origin)) {
           const prefetchLink = document.createElement('link');
           prefetchLink.rel = 'prefetch';
