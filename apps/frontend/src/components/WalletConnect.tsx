@@ -1,6 +1,4 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useWallet } from '@solana/wallet-adapter-react';
-import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import bs58 from 'bs58';
 
 interface WalletContextType {
@@ -13,50 +11,146 @@ interface WalletContextType {
 }
 
 export const useWalletContext = (): WalletContextType => {
-  const {
-    publicKey,
-    connected,
-    connecting,
-    disconnect,
-    connect: adapterConnect,
-    signMessage: adapterSignMessage,
-    wallet,
-  } = useWallet();
-  const modal = useWalletModal();
+  const [walletAddress, setWalletAddress] = useState<string | null>(null);
+  const [isConnected, setIsConnected] = useState(false);
+  const [isConnecting, setIsConnecting] = useState(false);
 
-  const walletAddress = publicKey ? publicKey.toBase58() : null;
-  const isConnected = connected;
-
-  const connect = useCallback(async (): Promise<string | null> => {
-    if (!wallet) {
-      modal.setVisible(true);
+  const getProvider = useCallback(() => {
+    if (typeof window === 'undefined') {
       return null;
     }
 
-    await adapterConnect();
-    return publicKey ? publicKey.toBase58() : null;
-  }, [wallet, modal, adapterConnect, publicKey]);
+    const anyWindow = window as Window & {
+      phantom?: { solana?: any };
+      solflare?: any;
+      backpack?: any;
+      glowSolana?: any;
+      solana?: any;
+      __pacfiWalletProvider?: any;
+    };
+
+    const storedPreferredWallet = localStorage.getItem('pacfi_wallet_provider');
+
+    const providers = [
+      { key: 'phantom', provider: anyWindow.phantom?.solana },
+      { key: 'solflare', provider: anyWindow.solflare },
+      { key: 'backpack', provider: anyWindow.backpack },
+      { key: 'glow', provider: anyWindow.glowSolana },
+      { key: 'solana', provider: anyWindow.solana },
+    ].filter((item) => Boolean(item.provider));
+
+    if (providers.length === 0) {
+      return null;
+    }
+
+    const preferred = providers.find((item) => item.key === storedPreferredWallet);
+    const resolved = preferred ?? providers[0];
+
+    anyWindow.__pacfiWalletProvider = resolved.provider;
+    return { provider: resolved.provider, key: resolved.key };
+  }, []);
+
+  const syncWalletState = useCallback(() => {
+    const resolved = getProvider();
+    if (!resolved) {
+      setWalletAddress(null);
+      setIsConnected(false);
+      return;
+    }
+
+    const currentAddress = resolved.provider?.publicKey?.toBase58?.() ?? null;
+    const connected = Boolean(resolved.provider?.isConnected && currentAddress);
+
+    setWalletAddress(currentAddress);
+    setIsConnected(connected);
+  }, [getProvider]);
+
+  useEffect(() => {
+    syncWalletState();
+
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const handleWalletChange = () => {
+      syncWalletState();
+    };
+
+    window.addEventListener('focus', handleWalletChange);
+    window.addEventListener('pacfi-wallet-state-changed', handleWalletChange as EventListener);
+
+    return () => {
+      window.removeEventListener('focus', handleWalletChange);
+      window.removeEventListener('pacfi-wallet-state-changed', handleWalletChange as EventListener);
+    };
+  }, [syncWalletState]);
+
+  const emitWalletChanged = useCallback(() => {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('pacfi-wallet-state-changed'));
+    }
+  }, []);
+
+  const connect = useCallback(async (): Promise<string | null> => {
+    const resolved = getProvider();
+    if (!resolved) {
+      throw new Error('No Solana wallet detected. Install Phantom, Solflare, Backpack, or Glow.');
+    }
+
+    setIsConnecting(true);
+
+    try {
+      const connection = await resolved.provider.connect();
+      localStorage.setItem('pacfi_wallet_provider', resolved.key);
+
+      const nextAddress =
+        connection?.publicKey?.toBase58?.() ?? resolved.provider?.publicKey?.toBase58?.() ?? null;
+
+      setWalletAddress(nextAddress);
+      setIsConnected(Boolean(nextAddress));
+      emitWalletChanged();
+
+      return nextAddress;
+    } finally {
+      setIsConnecting(false);
+    }
+  }, [emitWalletChanged, getProvider]);
 
   const handleDisconnect = useCallback(async (): Promise<void> => {
-    await disconnect();
-  }, [disconnect]);
+    const resolved = getProvider();
+    if (resolved?.provider?.disconnect) {
+      await resolved.provider.disconnect();
+    }
+
+    setWalletAddress(null);
+    setIsConnected(false);
+    emitWalletChanged();
+  }, [emitWalletChanged, getProvider]);
 
   const signMessage = useCallback(
     async (message: string): Promise<string> => {
-      if (!adapterSignMessage) {
+      const resolved = getProvider();
+      if (!resolved?.provider) {
+        throw new Error('Wallet is not available');
+      }
+
+      if (!resolved.provider.signMessage) {
         throw new Error('Wallet does not support message signing');
       }
+
       const messageBytes = new TextEncoder().encode(message);
-      const signature = await adapterSignMessage(messageBytes);
-      return bs58.encode(signature);
+      const result = await resolved.provider.signMessage(messageBytes, 'utf8');
+      const signatureBytes: Uint8Array = result?.signature ?? result;
+
+      return bs58.encode(signatureBytes);
     },
-    [adapterSignMessage]
+    [getProvider]
   );
 
   return {
     walletAddress,
     isConnected,
-    isConnecting: connecting,
+    isConnecting,
     connect,
     disconnect: handleDisconnect,
     signMessage,
@@ -69,9 +163,9 @@ interface WalletConnectProps {
 }
 
 export default function WalletConnect({ onConnect, onDisconnect }: WalletConnectProps) {
-  const { walletAddress, isConnected, disconnect } = useWalletContext();
-  const { setVisible } = useWalletModal();
+  const { walletAddress, isConnected, disconnect, connect, isConnecting } = useWalletContext();
   const [mounted, setMounted] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     setMounted(true);
@@ -83,8 +177,13 @@ export default function WalletConnect({ onConnect, onDisconnect }: WalletConnect
     }
   }, [isConnected, walletAddress]);
 
-  const handleConnect = () => {
-    setVisible(true);
+  const handleConnect = async () => {
+    setError(null);
+    try {
+      await connect();
+    } catch (connectError) {
+      setError(connectError instanceof Error ? connectError.message : 'Failed to connect wallet');
+    }
   };
 
   const handleDisconnect = async () => {
@@ -114,10 +213,11 @@ export default function WalletConnect({ onConnect, onDisconnect }: WalletConnect
           </button>
         </div>
       ) : (
-        <button onClick={handleConnect} className="connect-btn">
-          Connect Wallet
+        <button onClick={handleConnect} className="connect-btn" disabled={isConnecting}>
+          {isConnecting ? 'Connecting...' : 'Connect Wallet'}
         </button>
       )}
+      {error ? <div className="wallet-error">{error}</div> : null}
     </div>
   );
 }
@@ -150,6 +250,12 @@ const styles = `
   .connect-btn:disabled {
     opacity: 0.6;
     cursor: not-allowed;
+  }
+
+  .wallet-error {
+    color: #dc2626;
+    font-size: 12px;
+    font-weight: 500;
   }
 
   .wallet-info {
