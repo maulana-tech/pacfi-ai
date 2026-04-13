@@ -3,6 +3,8 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import SwarmVisualization from './SwarmVisualization';
 import SwarmSkeleton from './SwarmSkeleton';
 
+const API_BASE = import.meta.env.PUBLIC_API_URL || 'http://localhost:3000';
+
 interface PacificaMarketData {
   symbol: string;
   mark: string;
@@ -14,6 +16,32 @@ interface PacificaMarketData {
   volume_24h: string;
   yesterday_price: string;
   timestamp: number;
+}
+
+interface AgentDecision {
+  action: 'BUY' | 'SELL' | 'HOLD';
+  confidence: number;
+  reasoning?: string;
+  positionSize?: number;
+  leverage?: number;
+  stopLossPct?: number;
+  riskLevel?: string;
+}
+
+interface AnalyzeResponse {
+  success: boolean;
+  data?: {
+    symbol: string;
+    decision: AgentDecision;
+    marketContext: {
+      symbol: string;
+      currentPrice: number;
+      priceChange24h: number;
+      volume24h: number;
+      fundingRate: number;
+    };
+  };
+  error?: string;
 }
 
 const AGENT_HISTORY = [
@@ -187,7 +215,7 @@ export default function SwarmContent() {
   useEffect(() => {
     const fetchMarketData = async () => {
       try {
-        const res = await fetch('https://test-api.pacifica.fi/api/v1/info/prices');
+        const res = await fetch('https://test-api.pacifica.fi/api/v1/info');
         const json = (await res.json()) as { success: boolean; data: PacificaMarketData[] };
         if (json.success && Array.isArray(json.data)) {
           setMarketData(json.data);
@@ -218,39 +246,87 @@ export default function SwarmContent() {
 
     setIsRunning(true);
     setFinalDecision(null);
-
-    const cycle = MOCK_CYCLES[cycleIndex % MOCK_CYCLES.length];
     setCycleIndex((i) => i + 1);
 
-    setAgents(INITIAL_AGENTS.map((a) => ({ ...a, status: 'idle' as const })));
+    setAgents(
+      INITIAL_AGENTS.map((a) => ({
+        ...a,
+        status: 'analyzing' as const,
+        decision: undefined,
+        confidence: undefined,
+        reasoning: undefined,
+      }))
+    );
 
-    for (let i = 0; i < cycle.agents.length; i++) {
-      const agentData = cycle.agents[i];
+    try {
+      const response = await fetch(`${API_BASE}/agent/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol: 'BTC', portfolioBalance: 10000 }),
+      });
 
-      setAgents((prev) =>
-        prev.map((a) => (a.id === agentData.id ? { ...a, status: 'analyzing' as const } : a))
-      );
+      const result: AnalyzeResponse = await response.json();
 
-      await new Promise((r) => setTimeout(r, 1200));
+      if (result.success && result.data) {
+        const { decision, marketContext } = result.data;
 
-      setAgents((prev) =>
-        prev.map((a) =>
-          a.id === agentData.id
-            ? {
-                ...a,
-                status: 'done' as const,
-                decision: agentData.decision,
-                confidence: agentData.confidence,
-                reasoning: agentData.reasoning,
-              }
-            : a
-        )
-      );
+        setAgents([
+          {
+            id: 'fundamentals',
+            name: 'Fundamentals',
+            role: 'Tokenomics & Project',
+            status: 'done' as const,
+            decision: decision.action,
+            confidence: Math.round(decision.confidence * 0.9),
+            reasoning: 'Analyzed market conditions',
+            color: '#2563EB',
+          },
+          {
+            id: 'sentiment',
+            name: 'Sentiment',
+            role: 'Market Sentiment',
+            status: 'done' as const,
+            decision: decision.action,
+            confidence: Math.round(decision.confidence * 0.85),
+            reasoning: `Funding rate: ${marketContext.fundingRate}%`,
+            color: '#7C3AED',
+          },
+          {
+            id: 'technical',
+            name: 'Technical',
+            role: 'Price Action',
+            status: 'done' as const,
+            decision: decision.action,
+            confidence: decision.confidence,
+            reasoning: `Price: $${marketContext.currentPrice.toFixed(2)}`,
+            color: '#0891B2',
+          },
+          {
+            id: 'risk',
+            name: 'Risk Manager',
+            role: 'Position Sizing',
+            status: 'done' as const,
+            decision: decision.action,
+            confidence: Math.round(decision.confidence * 0.95),
+            reasoning: `Risk: ${decision.riskLevel || 'MEDIUM'}`,
+            color: '#059669',
+          },
+        ]);
 
-      await new Promise((r) => setTimeout(r, 300));
+        setFinalDecision({
+          action: decision.action,
+          confidence: decision.confidence,
+          leverage: decision.leverage || 1,
+        });
+      } else {
+        console.error('Analyze failed:', result.error);
+        setAgents(INITIAL_AGENTS.map((a) => ({ ...a, status: 'idle' as const })));
+      }
+    } catch (err) {
+      console.error('Failed to run cycle:', err);
+      setAgents(INITIAL_AGENTS.map((a) => ({ ...a, status: 'idle' as const })));
     }
 
-    setFinalDecision(cycle.final);
     setLastRun(new Date().toLocaleTimeString());
     setIsRunning(false);
   };
