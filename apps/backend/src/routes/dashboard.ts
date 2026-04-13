@@ -261,6 +261,157 @@ router.get('/summary', async (c) => {
   }
 });
 
+router.get('/portfolio', async (c) => {
+  try {
+    const wallet = getWalletContext(c);
+    if (!wallet) {
+      return c.json(errorEnvelope('Invalid wallet address'), 400);
+    }
+
+    const [balance, positions] = await Promise.all([
+      pacificaClient.getBalance(wallet.walletAddress).catch(() => 0),
+      pacificaClient.getPositions(wallet.walletAddress).catch(() => []),
+    ]);
+
+    const openPositions = Array.isArray(positions) ? (positions as PositionLike[]) : [];
+
+    const totalNotional = openPositions.reduce((acc, p) => {
+      return acc + parseNumber(p.size, 0) * parseNumber(p.entryPrice, 0);
+    }, 0);
+
+    const allocationMap = new Map<string, number>();
+    for (const p of openPositions) {
+      const sym = String(p.symbol ?? 'UNKNOWN').toUpperCase();
+      const notional = parseNumber(p.size, 0) * parseNumber(p.entryPrice, 0);
+      allocationMap.set(sym, (allocationMap.get(sym) ?? 0) + notional);
+    }
+
+    const COLORS: Record<string, string> = {
+      'BTC/USD': '#F7931A',
+      'ETH/USD': '#627EEA',
+      'SOL/USD': '#9945FF',
+    };
+
+    const allocation = Array.from(allocationMap.entries()).map(([name, notional]) => ({
+      name,
+      value: totalNotional > 0 ? Math.round((notional / totalNotional) * 100) : 0,
+      color: COLORS[name] ?? '#E5E7EB',
+    }));
+
+    const userRow = await db.query.users.findFirst({
+      where: eq(users.walletAddress, wallet.walletAddress),
+      columns: { id: true },
+    });
+
+    if (!userRow) {
+      return c.json(
+        successEnvelope({
+          totalBalance: balance,
+          availableBalance: balance,
+          totalPnL: 0,
+          totalROI: 0,
+          winRate: 0,
+          sharpeRatio: 0,
+          maxDrawdown: 0,
+          avgWin: 0,
+          avgLoss: 0,
+          profitFactor: 0,
+          totalTrades: 0,
+          allocation,
+          equityCurve: [],
+        })
+      );
+    }
+
+    const allTrades = await db
+      .select({
+        pnl: trades.pnl,
+        roi: trades.roi,
+        status: trades.status,
+        executedAt: trades.executedAt,
+      })
+      .from(trades)
+      .where(eq(trades.userId, userRow.id))
+      .orderBy(asc(trades.executedAt));
+
+    const closedTrades = allTrades.filter((t) => t.status === 'CLOSED');
+    const wins = closedTrades.filter((t) => parseNumber(t.pnl, 0) > 0);
+    const losses = closedTrades.filter((t) => parseNumber(t.pnl, 0) <= 0);
+
+    const totalPnL = closedTrades.reduce((acc, t) => acc + parseNumber(t.pnl, 0), 0);
+    const totalROI = closedTrades.reduce((acc, t) => acc + parseNumber(t.roi, 0), 0);
+    const winRate = closedTrades.length > 0 ? (wins.length / closedTrades.length) * 100 : 0;
+
+    const avgWin = wins.length > 0 ? wins.reduce((a, t) => a + parseNumber(t.pnl, 0), 0) / wins.length : 0;
+    const avgLoss = losses.length > 0 ? losses.reduce((a, t) => a + parseNumber(t.pnl, 0), 0) / losses.length : 0;
+    const sumWins = wins.reduce((a, t) => a + parseNumber(t.pnl, 0), 0);
+    const sumLosses = Math.abs(losses.reduce((a, t) => a + parseNumber(t.pnl, 0), 0));
+    const profitFactor = sumLosses > 0 ? sumWins / sumLosses : sumWins > 0 ? 99 : 0;
+
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const recentTrades = closedTrades.filter(
+      (t) => t.executedAt && new Date(t.executedAt) >= thirtyDaysAgo
+    );
+
+    const dayMap = new Map<string, number>();
+    for (const t of recentTrades) {
+      const day = new Date(t.executedAt!).toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+      });
+      dayMap.set(day, (dayMap.get(day) ?? 0) + parseNumber(t.pnl, 0));
+    }
+
+    const equityCurve: { date: string; equity: number }[] = [];
+    let runningEquity = balance - totalPnL;
+    for (let i = 30; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const label = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      runningEquity += dayMap.get(label) ?? 0;
+      equityCurve.push({ date: label, equity: parseFloat(runningEquity.toFixed(2)) });
+    }
+
+    const roiValues = closedTrades.map((t) => parseNumber(t.roi, 0));
+    const sharpeRatio = computeSharpe(roiValues);
+
+    let peak = equityCurve[0]?.equity ?? 0;
+    let maxDrawdown = 0;
+    for (const point of equityCurve) {
+      if (point.equity > peak) peak = point.equity;
+      const drawdown = peak > 0 ? ((peak - point.equity) / peak) * 100 : 0;
+      if (drawdown > maxDrawdown) maxDrawdown = drawdown;
+    }
+
+    const openPnl = openPositions.reduce((acc, p) => acc + parseNumber(p.unrealizedPnl ?? 0, 0), 0);
+    const availableBalance = balance - openPositions.reduce((acc, p) => {
+      return acc + parseNumber(p.size, 0) * parseNumber(p.entryPrice, 0) / parseNumber(p.leverage ?? 1, 1);
+    }, 0);
+
+    return c.json(
+      successEnvelope({
+        totalBalance: balance,
+        availableBalance: Math.max(0, availableBalance),
+        totalPnL,
+        openPnl,
+        totalROI,
+        winRate,
+        sharpeRatio,
+        maxDrawdown,
+        avgWin,
+        avgLoss,
+        profitFactor,
+        totalTrades: allTrades.length,
+        allocation,
+        equityCurve,
+      })
+    );
+  } catch (error) {
+    console.error('[Dashboard] Error fetching portfolio:', error);
+    return c.json(errorEnvelope('Failed to fetch portfolio'), 500);
+  }
+});
+
 router.get('/positions', async (c) => {
   try {
     const wallet = getWalletContext(c);
@@ -439,6 +590,156 @@ router.get('/swarm-status', async (c) => {
   } catch (error) {
     console.error('[Dashboard] Error fetching swarm status:', error);
     return c.json(errorEnvelope('Failed to fetch swarm status'), 500);
+  }
+});
+
+router.get('/swarm-history', async (c) => {
+  try {
+    const wallet = getWalletContext(c);
+    if (!wallet) {
+      return c.json(errorEnvelope('Invalid wallet address'), 400);
+    }
+
+    const limitInput = Number.parseInt(c.req.query('limit') ?? '10', 10);
+    const limit = Number.isFinite(limitInput) ? Math.min(Math.max(limitInput, 1), 50) : 10;
+
+    const userRow = await db.query.users.findFirst({
+      where: eq(users.walletAddress, wallet.walletAddress),
+      columns: { id: true },
+    });
+
+    if (!userRow) {
+      return c.json(
+        successEnvelope({
+          decisions: [],
+          agentHistory: [],
+          stats: { totalCycles: 0, avgConfidence: 0, winRate: 0, activeAgents: 4 },
+        })
+      );
+    }
+
+    const recentTrades = await db
+      .select({
+        id: trades.id,
+        symbol: trades.symbol,
+        side: trades.side,
+        pnl: trades.pnl,
+        status: trades.status,
+        executedAt: trades.executedAt,
+        aiReasoning: trades.aiReasoning,
+      })
+      .from(trades)
+      .where(eq(trades.userId, userRow.id))
+      .orderBy(desc(trades.executedAt))
+      .limit(limit);
+
+    const tradeIds = recentTrades.map((t) => t.id);
+    const coordinatorLogs = tradeIds.length > 0
+      ? await db
+          .select({
+            tradeId: aiLogs.tradeId,
+            confidence: aiLogs.confidence,
+            outputDecision: aiLogs.outputDecision,
+          })
+          .from(aiLogs)
+          .where(eq(aiLogs.userId, userRow.id))
+      : [];
+
+    const confidenceByTrade = new Map<string, number>();
+    for (const log of coordinatorLogs) {
+      if (log.tradeId && !confidenceByTrade.has(log.tradeId)) {
+        confidenceByTrade.set(log.tradeId, parseNumber(log.confidence, 0));
+      }
+    }
+
+    const decisions = recentTrades.map((t) => {
+      const pnlVal = parseNumber(t.pnl, 0);
+      const result = t.status === 'OPEN' ? 'OPEN' : pnlVal > 0 ? 'WIN' : 'LOSS';
+      const pnlStr = t.pnl
+        ? `${pnlVal >= 0 ? '+' : ''}$${Math.abs(pnlVal).toFixed(2)}`
+        : null;
+      const executedDate = t.executedAt ? new Date(t.executedAt) : new Date();
+      const time = executedDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+
+      return {
+        time,
+        symbol: t.symbol,
+        action: t.side === 'BUY' ? 'BUY' : 'SELL',
+        confidence: confidenceByTrade.get(t.id) ?? null,
+        result,
+        pnl: pnlStr,
+      };
+    });
+
+    const recentLogs = await db
+      .select({
+        tradeId: aiLogs.tradeId,
+        agentName: aiLogs.agentName,
+        confidence: aiLogs.confidence,
+        timestamp: aiLogs.timestamp,
+      })
+      .from(aiLogs)
+      .where(eq(aiLogs.userId, userRow.id))
+      .orderBy(desc(aiLogs.timestamp))
+      .limit(200);
+
+    const cycleMap = new Map<string, { agentName: string; confidence: number }[]>();
+    for (const log of recentLogs) {
+      const key = log.tradeId ?? `solo-${log.agentName}`;
+      if (!cycleMap.has(key)) cycleMap.set(key, []);
+      cycleMap.get(key)!.push({
+        agentName: log.agentName.toLowerCase(),
+        confidence: parseNumber(log.confidence, 0),
+      });
+    }
+
+    const cycleKeys = Array.from(cycleMap.keys()).slice(0, 7);
+    const agentHistory = cycleKeys.map((key, idx) => {
+      const logs = cycleMap.get(key)!;
+      const getConf = (name: string) =>
+        logs.find((l) => l.agentName.includes(name))?.confidence ?? 0;
+      return {
+        cycle: `C${idx + 1}`,
+        analyst: getConf('market'),
+        sentiment: getConf('sentiment'),
+        risk: getConf('risk'),
+        coordinator: getConf('coordinator'),
+      };
+    });
+
+    const allLogs = await db
+      .select({ confidence: aiLogs.confidence, agentName: aiLogs.agentName })
+      .from(aiLogs)
+      .where(eq(aiLogs.userId, userRow.id));
+
+    const totalCycles = cycleMap.size;
+    const avgConfidence =
+      allLogs.length > 0
+        ? allLogs.reduce((a, l) => a + parseNumber(l.confidence, 0), 0) / allLogs.length
+        : 0;
+
+    const closedTrades = recentTrades.filter((t) => t.status === 'CLOSED');
+    const wins = closedTrades.filter((t) => parseNumber(t.pnl, 0) > 0);
+    const winRate = closedTrades.length > 0 ? (wins.length / closedTrades.length) * 100 : 0;
+
+    const activeAgentNames = new Set(allLogs.map((l) => l.agentName.toLowerCase()));
+    const activeAgents = Math.min(activeAgentNames.size, 4);
+
+    return c.json(
+      successEnvelope({
+        decisions,
+        agentHistory,
+        stats: {
+          totalCycles,
+          avgConfidence: parseFloat(avgConfidence.toFixed(1)),
+          winRate: parseFloat(winRate.toFixed(1)),
+          activeAgents,
+        },
+      })
+    );
+  } catch (error) {
+    console.error('[Dashboard] Error fetching swarm history:', error);
+    return c.json(errorEnvelope('Failed to fetch swarm history'), 500);
   }
 });
 

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import SwarmVisualization from './SwarmVisualization';
 import SwarmSkeleton from './SwarmSkeleton';
+import { useWalletContext } from './WalletConnect';
 
 interface PacificaMarketData {
   symbol: string;
@@ -16,58 +17,41 @@ interface PacificaMarketData {
   timestamp: number;
 }
 
-const AGENT_HISTORY = [
-  { cycle: 'C1', analyst: 82, sentiment: 71, risk: 75, coordinator: 78 },
-  { cycle: 'C2', analyst: 65, sentiment: 58, risk: 70, coordinator: 64 },
-  { cycle: 'C3', analyst: 78, sentiment: 82, risk: 68, coordinator: 76 },
-  { cycle: 'C4', analyst: 91, sentiment: 74, risk: 85, coordinator: 84 },
-  { cycle: 'C5', analyst: 55, sentiment: 62, risk: 60, coordinator: 58 },
-  { cycle: 'C6', analyst: 88, sentiment: 79, risk: 82, coordinator: 83 },
-  { cycle: 'C7', analyst: 72, sentiment: 68, risk: 74, coordinator: 71 },
-];
+interface SwarmDecision {
+  time: string;
+  symbol: string;
+  action: string;
+  confidence: number;
+  result: 'WIN' | 'LOSS' | 'OPEN';
+  pnl: number;
+}
 
-const RECENT_DECISIONS = [
-  {
-    time: '14:32',
-    symbol: 'BTC/USD',
-    action: 'BUY',
-    confidence: 78,
-    result: 'WIN',
-    pnl: '+$20.53',
-  },
-  {
-    time: '13:15',
-    symbol: 'ETH/USD',
-    action: 'SELL',
-    confidence: 72,
-    result: 'WIN',
-    pnl: '+$51.84',
-  },
-  {
-    time: '12:48',
-    symbol: 'SOL/USD',
-    action: 'BUY',
-    confidence: 65,
-    result: 'OPEN',
-    pnl: '+$14.50',
-  },
-  {
-    time: '11:20',
-    symbol: 'BTC/USD',
-    action: 'SELL',
-    confidence: 80,
-    result: 'WIN',
-    pnl: '+$15.00',
-  },
-  {
-    time: '10:05',
-    symbol: 'ETH/USD',
-    action: 'BUY',
-    confidence: 58,
-    result: 'LOSS',
-    pnl: '-$72.00',
-  },
-];
+interface AgentHistoryItem {
+  cycle: string;
+  market_analyst: number;
+  sentiment_agent: number;
+  risk_manager: number;
+  coordinator: number;
+}
+
+interface SwarmHistoryData {
+  decisions: SwarmDecision[];
+  agentHistory: AgentHistoryItem[];
+  stats: {
+    totalCycles: number;
+    avgConfidence: number;
+    winRate: number;
+    activeAgents: number;
+  };
+}
+
+interface ApiEnvelope<T> {
+  success: boolean;
+  data: T;
+  error: string | null;
+}
+
+const API_URL = import.meta.env.PUBLIC_API_URL ?? 'http://localhost:3001';
 
 interface Agent {
   id: string;
@@ -173,6 +157,7 @@ const MOCK_CYCLES = [
 ];
 
 export default function SwarmContent() {
+  const { walletAddress, isConnected } = useWalletContext();
   const [agents, setAgents] = useState<Agent[]>(INITIAL_AGENTS);
   const [isRunning, setIsRunning] = useState(false);
   const [finalDecision, setFinalDecision] = useState<{
@@ -183,6 +168,47 @@ export default function SwarmContent() {
   const [cycleIndex, setCycleIndex] = useState(0);
   const [lastRun, setLastRun] = useState<string | null>(null);
   const [marketData, setMarketData] = useState<PacificaMarketData[]>([]);
+  
+  const [swarmHistory, setSwarmHistory] = useState<SwarmHistoryData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchSwarmHistory = async () => {
+    if (!isConnected || !walletAddress) {
+      setLoading(false);
+      setError('Connect your wallet to view swarm history.');
+      return;
+    }
+    try {
+      setError(null);
+      setLoading(true);
+      const res = await fetch(`${API_URL}/dashboard/swarm-history`, {
+        headers: { 'X-Wallet-Address': walletAddress },
+      });
+      const json = (await res.json()) as ApiEnvelope<SwarmHistoryData>;
+      if (json.success) {
+        setSwarmHistory(json.data);
+      } else {
+        setError(json.error ?? 'Failed to load swarm history.');
+      }
+    } catch {
+      setError('Network error. Please retry.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchSwarmHistory();
+  }, [isConnected, walletAddress]);
+
+  useEffect(() => {
+    if (!isConnected || !walletAddress) {
+      return;
+    }
+    const interval = setInterval(fetchSwarmHistory, 30000);
+    return () => clearInterval(interval);
+  }, [isConnected, walletAddress]);
 
   useEffect(() => {
     const fetchMarketData = async () => {
@@ -255,16 +281,26 @@ export default function SwarmContent() {
     setIsRunning(false);
   };
 
+  const stats =
+    swarmHistory && !loading && !error
+      ? [
+          { label: 'Total Cycles', value: String(swarmHistory.stats.totalCycles), sub: 'All time' },
+          { label: 'Avg. Confidence', value: `${swarmHistory.stats.avgConfidence.toFixed(1)}%`, sub: 'Last 30 days' },
+          { label: 'Swarm Win Rate', value: `${swarmHistory.stats.winRate.toFixed(1)}%`, sub: 'Based on decisions' },
+          { label: 'Active Agents', value: `${swarmHistory.stats.activeAgents}/4`, sub: 'All online' },
+        ]
+      : [
+          { label: 'Total Cycles', value: '-', sub: 'All time' },
+          { label: 'Avg. Confidence', value: '-', sub: 'Last 30 days' },
+          { label: 'Swarm Win Rate', value: '-', sub: 'Based on decisions' },
+          { label: 'Active Agents', value: '-', sub: 'All online' },
+        ];
+
   return (
     <div style={{ padding: '24px 28px', display: 'flex', flexDirection: 'column', gap: 16 }}>
       {/* Stats row */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14 }}>
-        {[
-          { label: 'Total Cycles', value: '142', sub: 'All time' },
-          { label: 'Avg. Confidence', value: '72.4%', sub: 'Last 30 days' },
-          { label: 'Swarm Win Rate', value: '68.5%', sub: 'Based on decisions' },
-          { label: 'Active Agents', value: '4/4', sub: 'All online' },
-        ].map((s) => (
+        {stats.map((s) => (
           <div key={s.label} className="stat-card">
             <div className="stat-label">{s.label}</div>
             <div className="stat-value num">{s.value}</div>
@@ -369,107 +405,40 @@ export default function SwarmContent() {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
         <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
           <div style={{ padding: '16px 20px', borderBottom: '1px solid #F3F4F6' }}>
-            <span className="card-title">Agent Status</span>
+            <span className="card-title">Agent History (Last 7 Cycles)</span>
           </div>
-          <div style={{ padding: '12px 20px' }}>
-            {agents.map((agent, idx) => (
-              <div
-                key={agent.id}
-                style={{
-                  display: 'flex',
-                  alignItems: 'flex-start',
-                  gap: 12,
-                  padding: '10px 0',
-                  borderBottom: idx < agents.length - 1 ? '1px solid #F9FAFB' : 'none',
-                }}
-              >
-                <div style={{ paddingTop: 2 }}>
-                  <span
-                    className="dot"
-                    style={{
-                      background: getStatusColor(agent.status),
-                      boxShadow:
-                        agent.status === 'analyzing'
-                          ? '0 0 0 3px rgba(245,158,11,0.15)'
-                          : agent.status === 'done'
-                            ? '0 0 0 3px rgba(16,185,129,0.15)'
-                            : 'none',
-                      transition: 'all 0.3s',
-                    }}
-                  />
-                </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
-                    <span style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>
-                      {agent.name}
-                    </span>
-                    <span style={{ fontSize: 11, color: '#9CA3AF' }}>{agent.role}</span>
-                  </div>
-                  {agent.status === 'analyzing' && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <div
-                        className="skeleton"
-                        style={{ height: 10, width: 140, borderRadius: 4 }}
-                      />
-                    </div>
-                  )}
-                  {agent.status === 'done' && agent.reasoning && (
-                    <p
-                      style={{
-                        fontSize: 11,
-                        color: '#6B7280',
-                        lineHeight: 1.4,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                        maxWidth: '100%',
-                      }}
-                    >
-                      {agent.reasoning}
-                    </p>
-                  )}
-                  {agent.status === 'idle' && (
-                    <p style={{ fontSize: 11, color: '#D1D5DB' }}>Waiting...</p>
-                  )}
-                </div>
-                {agent.status === 'done' && agent.decision && (
-                  <div
-                    style={{
-                      display: 'flex',
-                      flexDirection: 'column',
-                      alignItems: 'flex-end',
-                      gap: 3,
-                    }}
-                  >
-                    <span
-                      className="badge"
-                      style={{
-                        background:
-                          agent.decision === 'BUY'
-                            ? '#ECFDF5'
-                            : agent.decision === 'SELL'
-                              ? '#FEF2F2'
-                              : '#F3F4F6',
-                        color:
-                          agent.decision === 'BUY'
-                            ? '#059669'
-                            : agent.decision === 'SELL'
-                              ? '#DC2626'
-                              : '#6B7280',
-                      }}
-                    >
-                      {agent.decision}
-                    </span>
-                    <span
-                      className="num"
-                      style={{ fontSize: 11, color: '#9CA3AF', fontWeight: 600 }}
-                    >
-                      {agent.confidence}%
-                    </span>
-                  </div>
-                )}
+          <div style={{ padding: '16px 20px' }}>
+            {!isConnected ? (
+              <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#9CA3AF' }}>
+                Connect wallet to view agent history
               </div>
-            ))}
+            ) : loading ? (
+              <div className="skeleton" style={{ height: 200, borderRadius: 10 }} />
+            ) : error ? (
+              <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#EF4444' }}>
+                {error}
+              </div>
+            ) : swarmHistory && swarmHistory.agentHistory.length > 0 ? (
+              <ResponsiveContainer width="100%" height={200}>
+                <BarChart data={swarmHistory.agentHistory}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" vertical={false} />
+                  <XAxis dataKey="cycle" tick={{ fontSize: 10, fill: '#9CA3AF' }} tickLine={false} axisLine={false} />
+                  <YAxis tick={{ fontSize: 10, fill: '#9CA3AF' }} tickLine={false} axisLine={false} domain={[0, 100]} />
+                  <Tooltip
+                    formatter={(v: number) => `${v}%`}
+                    contentStyle={{ background: '#FFF', border: '1px solid #E5E7EB', borderRadius: 6, fontSize: 11 }}
+                  />
+                  <Bar dataKey="market_analyst" stackId="a" fill="#2563EB" name="Market Analyst" />
+                  <Bar dataKey="sentiment_agent" stackId="a" fill="#7C3AED" name="Sentiment Agent" />
+                  <Bar dataKey="risk_manager" stackId="a" fill="#0891B2" name="Risk Manager" />
+                  <Bar dataKey="coordinator" stackId="a" fill="#059669" name="Coordinator" />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#9CA3AF' }}>
+                No agent history yet
+              </div>
+            )}
           </div>
         </div>
 
@@ -489,61 +458,87 @@ export default function SwarmContent() {
               </tr>
             </thead>
             <tbody>
-              {RECENT_DECISIONS.map((d, i) => (
-                <tr key={i}>
-                  <td>
-                    <span style={{ fontSize: 12, color: '#9CA3AF' }}>{d.time}</span>
-                  </td>
-                  <td>
-                    <span style={{ fontWeight: 600, color: '#111827' }}>{d.symbol}</span>
-                  </td>
-                  <td>
-                    <span className={d.action === 'BUY' ? 'badge badge-buy' : 'badge badge-sell'}>
-                      {d.action}
-                    </span>
-                  </td>
-                  <td style={{ textAlign: 'right' }}>
-                    <span
-                      className="num"
-                      style={{ fontSize: 12, fontWeight: 600, color: '#374151' }}
-                    >
-                      {d.confidence}%
-                    </span>
-                  </td>
-                  <td>
-                    <span
-                      className="badge"
-                      style={{
-                        background:
-                          d.result === 'WIN'
-                            ? '#ECFDF5'
-                            : d.result === 'LOSS'
-                              ? '#FEF2F2'
-                              : '#EFF6FF',
-                        color:
-                          d.result === 'WIN'
-                            ? '#059669'
-                            : d.result === 'LOSS'
-                              ? '#DC2626'
-                              : '#2563EB',
-                      }}
-                    >
-                      {d.result}
-                    </span>
-                  </td>
-                  <td style={{ textAlign: 'right' }}>
-                    <span
-                      className="num"
-                      style={{
-                        fontWeight: 700,
-                        color: d.pnl.startsWith('+') ? '#10B981' : '#EF4444',
-                      }}
-                    >
-                      {d.pnl}
-                    </span>
+              {!isConnected ? (
+                <tr>
+                  <td colSpan={6} style={{ textAlign: 'center', padding: '20px', color: '#9CA3AF' }}>
+                    Connect wallet to view decisions
                   </td>
                 </tr>
-              ))}
+              ) : loading ? (
+                <tr>
+                  <td colSpan={6} style={{ textAlign: 'center', padding: '20px', color: '#9CA3AF' }}>
+                    Loading...
+                  </td>
+                </tr>
+              ) : error ? (
+                <tr>
+                  <td colSpan={6} style={{ textAlign: 'center', padding: '20px', color: '#EF4444' }}>
+                    {error}
+                  </td>
+                </tr>
+              ) : swarmHistory && swarmHistory.decisions.length > 0 ? (
+                swarmHistory.decisions.map((d, i) => (
+                  <tr key={i}>
+                    <td>
+                      <span style={{ fontSize: 12, color: '#9CA3AF' }}>{d.time}</span>
+                    </td>
+                    <td>
+                      <span style={{ fontWeight: 600, color: '#111827' }}>{d.symbol}</span>
+                    </td>
+                    <td>
+                      <span className={d.action === 'BUY' ? 'badge badge-buy' : 'badge badge-sell'}>
+                        {d.action}
+                      </span>
+                    </td>
+                    <td style={{ textAlign: 'right' }}>
+                      <span
+                        className="num"
+                        style={{ fontSize: 12, fontWeight: 600, color: '#374151' }}
+                      >
+                        {d.confidence}%
+                      </span>
+                    </td>
+                    <td>
+                      <span
+                        className="badge"
+                        style={{
+                          background:
+                            d.result === 'WIN'
+                              ? '#ECFDF5'
+                              : d.result === 'LOSS'
+                                ? '#FEF2F2'
+                                : '#EFF6FF',
+                          color:
+                            d.result === 'WIN'
+                              ? '#059669'
+                              : d.result === 'LOSS'
+                                ? '#DC2626'
+                                : '#2563EB',
+                        }}
+                      >
+                        {d.result}
+                      </span>
+                    </td>
+                    <td style={{ textAlign: 'right' }}>
+                      <span
+                        className="num"
+                        style={{
+                          fontWeight: 700,
+                          color: d.pnl >= 0 ? '#10B981' : '#EF4444',
+                        }}
+                      >
+                        {d.pnl >= 0 ? '+' : ''}${d.pnl.toFixed(2)}
+                      </span>
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={6} style={{ textAlign: 'center', padding: '20px', color: '#9CA3AF' }}>
+                    No decisions yet
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
