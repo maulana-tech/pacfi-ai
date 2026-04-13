@@ -6,6 +6,8 @@ import { db } from '../db';
 import { aiLogs, leaderboard, trades, users } from '../db/schema';
 import { errorEnvelope, successEnvelope } from '../lib/api';
 
+const dbAvailable = typeof db !== 'undefined' && db !== null;
+
 const router = new Hono();
 const pacificaClient = new PacificaClient();
 
@@ -170,7 +172,9 @@ async function buildComputedLeaderboardWithPeriod(
       winRate: row.closedTrades > 0 ? (row.wins / row.closedTrades) * 100 : 0,
       sharpeRatio: computeSharpe(row.roiValues),
       totalTrades: row.totalTrades,
-      updatedAt: row.latestTimestamp ? new Date(row.latestTimestamp).toISOString() : new Date().toISOString(),
+      updatedAt: row.latestTimestamp
+        ? new Date(row.latestTimestamp).toISOString()
+        : new Date().toISOString(),
     }));
 }
 
@@ -222,25 +226,31 @@ router.get('/summary', async (c) => {
       return acc + parseNumber(item.unrealizedPnl ?? 0, 0);
     }, 0);
 
-    const userRow = await db.query.users.findFirst({
-      where: eq(users.walletAddress, wallet.walletAddress),
-      columns: { id: true },
-    });
-
     let totalTrades = 0;
     let winRate = 0;
 
-    if (userRow) {
-      const userTrades = await db
-        .select({ pnl: trades.pnl, status: trades.status })
-        .from(trades)
-        .where(eq(trades.userId, userRow.id));
+    try {
+      if (dbAvailable) {
+        const userRow = await db.query.users.findFirst({
+          where: eq(users.walletAddress, wallet.walletAddress),
+          columns: { id: true },
+        });
 
-      totalTrades = userTrades.length;
+        if (userRow) {
+          const userTrades = await db
+            .select({ pnl: trades.pnl, status: trades.status })
+            .from(trades)
+            .where(eq(trades.userId, userRow.id));
 
-      const closed = userTrades.filter((trade) => trade.status === 'CLOSED');
-      const wins = closed.filter((trade) => parseNumber(trade.pnl, 0) > 0).length;
-      winRate = closed.length > 0 ? (wins / closed.length) * 100 : 0;
+          totalTrades = userTrades.length;
+
+          const closed = userTrades.filter((trade: any) => trade.status === 'CLOSED');
+          const wins = closed.filter((trade: any) => parseNumber(trade.pnl, 0) > 0).length;
+          winRate = closed.length > 0 ? (wins / closed.length) * 100 : 0;
+        }
+      }
+    } catch (dbErr) {
+      console.warn('[Dashboard] DB query failed:', dbErr);
     }
 
     const openPnlPct = balance > 0 ? (openPnl / balance) * 100 : 0;
@@ -306,49 +316,58 @@ router.get('/trades', async (c) => {
     const limitInput = Number.parseInt(c.req.query('limit') ?? '10', 10);
     const limit = Number.isFinite(limitInput) ? Math.min(Math.max(limitInput, 1), 50) : 10;
 
-    const userRow = await db.query.users.findFirst({
-      where: eq(users.walletAddress, wallet.walletAddress),
-      columns: { id: true },
-    });
+    try {
+      if (!dbAvailable) {
+        return c.json(successEnvelope([]));
+      }
 
-    if (!userRow) {
+      const userRow = await db.query.users.findFirst({
+        where: eq(users.walletAddress, wallet.walletAddress),
+        columns: { id: true },
+      });
+
+      if (!userRow) {
+        return c.json(successEnvelope([]));
+      }
+
+      const rows = await db
+        .select({
+          id: trades.id,
+          symbol: trades.symbol,
+          side: trades.side,
+          size: trades.size,
+          entryPrice: trades.entryPrice,
+          exitPrice: trades.exitPrice,
+          pnl: trades.pnl,
+          roi: trades.roi,
+          status: trades.status,
+          leverage: trades.leverage,
+          executedAt: trades.executedAt,
+        })
+        .from(trades)
+        .where(eq(trades.userId, userRow.id))
+        .orderBy(desc(trades.executedAt))
+        .limit(limit);
+
+      const normalized = rows.map((row: any) => ({
+        id: row.id,
+        symbol: row.symbol,
+        side: row.side === 'BUY' ? 'BUY' : 'SELL',
+        size: parseNumber(row.size, 0),
+        entryPrice: parseNumber(row.entryPrice, 0),
+        exitPrice: row.exitPrice ? parseNumber(row.exitPrice, 0) : null,
+        pnl: row.pnl ? parseNumber(row.pnl, 0) : null,
+        pnlPct: row.roi ? parseNumber(row.roi, 0) : null,
+        status: row.status === 'OPEN' ? 'OPEN' : 'CLOSED',
+        leverage: parseNumber(row.leverage, 1),
+        executedAt: toIso(row.executedAt),
+      }));
+
+      return c.json(successEnvelope(normalized));
+    } catch (dbErr) {
+      console.warn('[Dashboard] DB query failed:', dbErr);
       return c.json(successEnvelope([]));
     }
-
-    const rows = await db
-      .select({
-        id: trades.id,
-        symbol: trades.symbol,
-        side: trades.side,
-        size: trades.size,
-        entryPrice: trades.entryPrice,
-        exitPrice: trades.exitPrice,
-        pnl: trades.pnl,
-        roi: trades.roi,
-        status: trades.status,
-        leverage: trades.leverage,
-        executedAt: trades.executedAt,
-      })
-      .from(trades)
-      .where(eq(trades.userId, userRow.id))
-      .orderBy(desc(trades.executedAt))
-      .limit(limit);
-
-    const normalized = rows.map((row) => ({
-      id: row.id,
-      symbol: row.symbol,
-      side: row.side === 'BUY' ? 'BUY' : 'SELL',
-      size: parseNumber(row.size, 0),
-      entryPrice: parseNumber(row.entryPrice, 0),
-      exitPrice: row.exitPrice ? parseNumber(row.exitPrice, 0) : null,
-      pnl: row.pnl ? parseNumber(row.pnl, 0) : null,
-      pnlPct: row.roi ? parseNumber(row.roi, 0) : null,
-      status: row.status === 'OPEN' ? 'OPEN' : 'CLOSED',
-      leverage: parseNumber(row.leverage, 1),
-      executedAt: toIso(row.executedAt),
-    }));
-
-    return c.json(successEnvelope(normalized));
   } catch (error) {
     console.error('[Dashboard] Error fetching trades:', error);
     return c.json(errorEnvelope('Failed to fetch trades'), 500);
@@ -362,12 +381,7 @@ router.get('/swarm-status', async (c) => {
       return c.json(errorEnvelope('Invalid wallet address'), 400);
     }
 
-    const userRow = await db.query.users.findFirst({
-      where: eq(users.walletAddress, wallet.walletAddress),
-      columns: { id: true },
-    });
-
-    if (!userRow) {
+    if (!dbAvailable) {
       return c.json(
         successEnvelope({
           agents: DEFAULT_AGENTS.map((agent) => ({
@@ -382,63 +396,110 @@ router.get('/swarm-status', async (c) => {
       );
     }
 
-    const logs = await db
-      .select({
-        agentName: aiLogs.agentName,
-        outputDecision: aiLogs.outputDecision,
-        confidence: aiLogs.confidence,
-        timestamp: aiLogs.timestamp,
-      })
-      .from(aiLogs)
-      .where(eq(aiLogs.userId, userRow.id))
-      .orderBy(desc(aiLogs.timestamp))
-      .limit(50);
+    try {
+      const userRow = await db.query.users.findFirst({
+        where: eq(users.walletAddress, wallet.walletAddress),
+        columns: { id: true },
+      });
 
-    const latestByAgent = new Map<string, (typeof logs)[number]>();
-    for (const log of logs) {
-      const key = log.agentName.toLowerCase();
-      if (!latestByAgent.has(key)) {
-        latestByAgent.set(key, log);
+      if (!userRow) {
+        return c.json(
+          successEnvelope({
+            agents: DEFAULT_AGENTS.map((agent) => ({
+              ...agent,
+              status: 'idle',
+              decision: null,
+              confidence: null,
+              reasoning: null,
+            })),
+            lastRun: null,
+          })
+        );
       }
-    }
 
-    const mapAgentLog = (agentId: string) => {
-      if (agentId === 'market_analyst') return latestByAgent.get('market analyst');
-      if (agentId === 'sentiment_agent') return latestByAgent.get('sentiment agent');
-      if (agentId === 'risk_manager') return latestByAgent.get('risk manager');
-      if (agentId === 'coordinator') return latestByAgent.get('coordinator');
-      return undefined;
-    };
+      const logs = await db
+        .select({
+          agentName: aiLogs.agentName,
+          outputDecision: aiLogs.outputDecision,
+          confidence: aiLogs.confidence,
+          timestamp: aiLogs.timestamp,
+        })
+        .from(aiLogs)
+        .where(eq(aiLogs.userId, userRow.id))
+        .orderBy(desc(aiLogs.timestamp))
+        .limit(50);
 
-    const agents = DEFAULT_AGENTS.map((agent) => {
-      const log = mapAgentLog(agent.id);
-      const decisionRaw = (log?.outputDecision ?? '').toUpperCase();
-      const decision = decisionRaw.includes('BUY')
-        ? 'BUY'
-        : decisionRaw.includes('SELL')
-          ? 'SELL'
-          : decisionRaw.includes('HOLD')
-            ? 'HOLD'
-            : null;
+      const latestByAgent = new Map<string, (typeof logs)[number]>();
+      for (const log of logs) {
+        const key = log.agentName.toLowerCase();
+        if (!latestByAgent.has(key)) {
+          latestByAgent.set(key, log);
+        }
+      }
 
-      return {
-        ...agent,
-        status: log ? 'done' : 'idle',
-        decision,
-        confidence: log?.confidence ? parseNumber(log.confidence, 0) : null,
-        reasoning: log?.outputDecision ?? null,
+      const mapAgentLog = (agentId: string) => {
+        if (agentId === 'market_analyst') return latestByAgent.get('market analyst');
+        if (agentId === 'sentiment_agent') return latestByAgent.get('sentiment agent');
+        if (agentId === 'risk_manager') return latestByAgent.get('risk manager');
+        if (agentId === 'coordinator') return latestByAgent.get('coordinator');
+        return undefined;
       };
-    });
 
-    return c.json(
-      successEnvelope({
-        agents,
-        lastRun: logs[0]?.timestamp ? toIso(logs[0].timestamp) : null,
-      })
-    );
+      const agents = DEFAULT_AGENTS.map((agent) => {
+        const log = mapAgentLog(agent.id);
+        const decisionRaw = (log?.outputDecision ?? '').toUpperCase();
+        const decision = decisionRaw.includes('BUY')
+          ? 'BUY'
+          : decisionRaw.includes('SELL')
+            ? 'SELL'
+            : decisionRaw.includes('HOLD')
+              ? 'HOLD'
+              : null;
+
+        return {
+          ...agent,
+          status: log ? 'done' : 'idle',
+          decision,
+          confidence: log?.confidence ? parseNumber(log.confidence, 0) : null,
+          reasoning: log?.outputDecision ?? null,
+        };
+      });
+
+      return c.json(
+        successEnvelope({
+          agents,
+          lastRun: logs[0]?.timestamp ? toIso(logs[0].timestamp) : null,
+        })
+      );
+    } catch (dbErr) {
+      console.warn('[Dashboard] DB query failed:', dbErr);
+      return c.json(
+        successEnvelope({
+          agents: DEFAULT_AGENTS.map((agent) => ({
+            ...agent,
+            status: 'idle',
+            decision: null,
+            confidence: null,
+            reasoning: null,
+          })),
+          lastRun: null,
+        })
+      );
+    }
   } catch (error) {
     console.error('[Dashboard] Error fetching swarm status:', error);
-    return c.json(errorEnvelope('Failed to fetch swarm status'), 500);
+    return c.json(
+      successEnvelope({
+        agents: DEFAULT_AGENTS.map((agent) => ({
+          ...agent,
+          status: 'idle',
+          decision: null,
+          confidence: null,
+          reasoning: null,
+        })),
+        lastRun: null,
+      })
+    );
   }
 });
 
@@ -447,51 +508,63 @@ router.get('/leaderboard-teaser', async (c) => {
     const limitInput = Number.parseInt(c.req.query('limit') ?? '3', 10);
     const limit = Number.isFinite(limitInput) ? Math.min(Math.max(limitInput, 1), 10) : 3;
     const periodRaw = (c.req.query('period') ?? 'all').toLowerCase();
-    const period: LeaderboardPeriod =
-      periodRaw === '7d' || periodRaw === '30d' ? periodRaw : 'all';
+    const period: LeaderboardPeriod = periodRaw === '7d' || periodRaw === '30d' ? periodRaw : 'all';
 
-    const rows = await db
-      .select({
-        rank: leaderboard.rank,
-        totalROI: leaderboard.totalROI,
-        winRate: leaderboard.winRate,
-        totalTrades: leaderboard.totalTrades,
-        updatedAt: leaderboard.updatedAt,
-        walletAddress: users.walletAddress,
-        username: users.username,
-      })
-      .from(leaderboard)
-      .innerJoin(users, eq(leaderboard.userId, users.id))
-      .orderBy(desc(leaderboard.totalROI), desc(leaderboard.winRate))
-      .limit(limit);
-
-    if (rows.length === 0 || period !== 'all') {
-      const computed = sortLeaderboardRows(await buildComputedLeaderboardWithPeriod(period), 'roi', 'desc')
-        .slice(0, limit)
-        .map((row, index) => ({
-          rank: index + 1,
-          walletAddress: row.walletAddress,
-          username: row.username,
-          totalROI: row.totalROI,
-          winRate: row.winRate,
-          totalTrades: row.totalTrades,
-          updatedAt: row.updatedAt,
-        }));
-
-      return c.json(successEnvelope(computed));
+    if (!dbAvailable) {
+      return c.json(successEnvelope([]));
     }
 
-    const normalized = rows.map((row, index) => ({
-      rank: row.rank ?? index + 1,
-      walletAddress: row.walletAddress,
-      username: row.username,
-      totalROI: parseNumber(row.totalROI, 0),
-      winRate: parseNumber(row.winRate, 0),
-      totalTrades: row.totalTrades ?? 0,
-      updatedAt: toIso(row.updatedAt),
-    }));
+    try {
+      const rows = await db
+        .select({
+          rank: leaderboard.rank,
+          totalROI: leaderboard.totalROI,
+          winRate: leaderboard.winRate,
+          totalTrades: leaderboard.totalTrades,
+          updatedAt: leaderboard.updatedAt,
+          walletAddress: users.walletAddress,
+          username: users.username,
+        })
+        .from(leaderboard)
+        .innerJoin(users, eq(leaderboard.userId, users.id))
+        .orderBy(desc(leaderboard.totalROI), desc(leaderboard.winRate))
+        .limit(limit);
 
-    return c.json(successEnvelope(normalized));
+      if (rows.length === 0 || period !== 'all') {
+        const computed = sortLeaderboardRows(
+          await buildComputedLeaderboardWithPeriod(period),
+          'roi',
+          'desc'
+        )
+          .slice(0, limit)
+          .map((row: any, index: any) => ({
+            rank: index + 1,
+            walletAddress: row.walletAddress,
+            username: row.username,
+            totalROI: row.totalROI,
+            winRate: row.winRate,
+            totalTrades: row.totalTrades,
+            updatedAt: row.updatedAt,
+          }));
+
+        return c.json(successEnvelope(computed));
+      }
+
+      const normalized = rows.map((row: any, index: any) => ({
+        rank: row.rank ?? index + 1,
+        walletAddress: row.walletAddress,
+        username: row.username,
+        totalROI: parseNumber(row.totalROI, 0),
+        winRate: parseNumber(row.winRate, 0),
+        totalTrades: row.totalTrades ?? 0,
+        updatedAt: toIso(row.updatedAt),
+      }));
+
+      return c.json(successEnvelope(normalized));
+    } catch (dbErr) {
+      console.warn('[Dashboard] DB query failed:', dbErr);
+      return c.json(successEnvelope([]));
+    }
   } catch (error) {
     console.error('[Dashboard] Error fetching leaderboard teaser:', error);
     return c.json(errorEnvelope('Failed to fetch leaderboard teaser'), 500);
@@ -520,8 +593,7 @@ router.get('/leaderboard', async (c) => {
     const sortByRaw = (c.req.query('sortBy') ?? 'roi').toLowerCase() as LeaderboardSortBy;
     const orderRaw = (c.req.query('order') ?? 'desc').toLowerCase() as LeaderboardOrder;
     const periodRaw = (c.req.query('period') ?? 'all').toLowerCase();
-    const period: LeaderboardPeriod =
-      periodRaw === '7d' || periodRaw === '30d' ? periodRaw : 'all';
+    const period: LeaderboardPeriod = periodRaw === '7d' || periodRaw === '30d' ? periodRaw : 'all';
 
     const sortColumn =
       sortByRaw === 'winrate'
