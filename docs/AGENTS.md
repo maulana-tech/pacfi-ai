@@ -19,6 +19,15 @@ cd apps/backend && pnpm dev    # localhost:3001 (Hono)
 cd apps/backend && pnpm db:push # Push Drizzle schema
 ```
 
+## Next Development
+
+See [NEXT_DEV.md](./NEXT_DEV.md) for:
+
+- Deep integrations (TradingAgents, Pacifica API, AI models)
+- Feature enhancements (trading, analytics, agents)
+- UI/UX improvements per page
+- Priority roadmap and quick wins
+
 ## Structure
 
 ```
