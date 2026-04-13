@@ -3,6 +3,8 @@ import { MarketData } from '../types';
 /**
  * Pacifica API Client
  * Handles order creation and market data fetching
+ * Testnet: https://test-api.pacifica.fi/api/v1
+ * Mainnet: https://api.pacifica.fi/api/v1
  */
 export class PacificaClient {
   private baseUrl = 'https://test-api.pacifica.fi/api/v1';
@@ -19,7 +21,129 @@ export class PacificaClient {
       throw new Error(`Pacifica API error: ${response.status} ${response.statusText} - ${error}`);
     }
 
-    return (await response.json()) as T;
+    const json: any = await response.json();
+
+    if (json.success === false) {
+      throw new Error(`Pacifica API error: ${json.error || 'Unknown error'}`);
+    }
+
+    return json.data ?? json;
+  }
+
+  /**
+   * Get all market prices
+   * Use /info endpoint which includes market data
+   */
+  async getPrices(): Promise<any> {
+    try {
+      const data = await this.request<any[]>('/info');
+      return data;
+    } catch (error) {
+      console.error('[PacificaClient] Error fetching prices:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get market info (all available trading pairs)
+   * Endpoint: GET /api/v1/info
+   */
+  async getMarketInfo(): Promise<any> {
+    try {
+      return await this.request('/info');
+    } catch (error) {
+      console.error('[PacificaClient] Error fetching market info:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get orderbook for a symbol
+   */
+  async getOrderbook(
+    symbol: string,
+    aggLevel: number = 1
+  ): Promise<{
+    symbol: string;
+    bids: Array<{ price: string; amount: string; orders: number }>;
+    asks: Array<{ price: string; amount: string; orders: number }>;
+    timestamp: number;
+  }> {
+    try {
+      const data = await this.request<any>(`/book?symbol=${symbol}&agg_level=${aggLevel}`);
+      return {
+        symbol: data.s,
+        bids:
+          data.l?.[0]?.map((p: { p: string; a: string; n: number }) => ({
+            price: p.p,
+            amount: p.a,
+            orders: p.n,
+          })) || [],
+        asks:
+          data.l?.[1]?.map((p: { p: string; a: string; n: number }) => ({
+            price: p.p,
+            amount: p.a,
+            orders: p.n,
+          })) || [],
+        timestamp: data.t,
+      };
+    } catch (error) {
+      console.error('[PacificaClient] Error fetching orderbook:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get recent trades for a symbol
+   */
+  async getRecentTrades(symbol: string): Promise<
+    Array<{
+      eventType: string;
+      price: string;
+      amount: string;
+      side: string;
+      cause: string;
+      createdAt: number;
+    }>
+  > {
+    try {
+      const data = await this.request<any[]>(`/trades?symbol=${symbol}`);
+      return data.map((t) => ({
+        eventType: t.event_type,
+        price: t.price,
+        amount: t.amount,
+        side: t.side,
+        cause: t.cause,
+        createdAt: t.created_at,
+      }));
+    } catch (error) {
+      console.error('[PacificaClient] Error fetching recent trades:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get candle data (OHLCV)
+   */
+  async getCandleData(symbol: string, interval: string = '1m', limit: number = 100): Promise<any> {
+    try {
+      return await this.request(`/candles?symbol=${symbol}&interval=${interval}&limit=${limit}`);
+    } catch (error) {
+      console.error('[PacificaClient] Error fetching candle data:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get historical funding
+   */
+  async getFundingHistory(symbol: string): Promise<any> {
+    try {
+      return await this.request(`/markets/funding?symbol=${symbol}`);
+    } catch (error) {
+      console.error('[PacificaClient] Error fetching funding history:', error);
+      throw error;
+    }
   }
 
   /**
@@ -135,11 +259,21 @@ export class PacificaClient {
 
   /**
    * Get account positions
+   * Endpoint: GET /positions?account=...
+   * Note: Pacifica only accepts standard Solana addresses (44 chars)
    */
   async getPositions(walletAddress: string): Promise<any> {
     try {
-      return await this.request(`/account/positions?account=${walletAddress}`);
-    } catch (error) {
+      if (walletAddress.length > 50) {
+        console.warn('[PacificaClient] Address too long for Pacifica API, returning empty');
+        return [];
+      }
+      return await this.request(`/positions?account=${walletAddress}`);
+    } catch (error: any) {
+      if (error.message?.includes('Wrong address size')) {
+        console.warn('[PacificaClient] Invalid address for Pacifica, returning empty');
+        return [];
+      }
       console.error('[PacificaClient] Error fetching positions:', error);
       throw error;
     }
@@ -147,16 +281,25 @@ export class PacificaClient {
 
   /**
    * Get account balance
+   * Endpoint: GET /account/balance?account=...
    */
   async getBalance(walletAddress: string): Promise<number> {
     try {
+      if (walletAddress.length > 50) {
+        console.warn('[PacificaClient] Address too long for Pacifica API, returning 0');
+        return 0;
+      }
       const data = await this.request<{ totalBalance: string }>(
         `/account/balance?account=${walletAddress}`
       );
       return parseFloat(data.totalBalance);
-    } catch (error) {
+    } catch (error: any) {
+      if (error.message?.includes('Wrong address size') || error.message?.includes('Not found')) {
+        console.warn('[PacificaClient] Invalid address for Pacifica, returning 0');
+        return 0;
+      }
       console.error('[PacificaClient] Error fetching balance:', error);
-      throw error;
+      return 0;
     }
   }
 
