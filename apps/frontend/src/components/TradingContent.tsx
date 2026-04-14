@@ -100,7 +100,7 @@ export default function TradingContent() {
 
     const fetchMarketData = async () => {
       try {
-        const data = await fetchPacificaMarketData(SYMBOLS as unknown as string[]);
+        const data = await fetchPacificaMarketData(SYMBOLS as unknown as string[], true);
         if (isMounted) {
           setMarketData(data);
         }
