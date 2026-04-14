@@ -15,9 +15,21 @@ interface WalletContextType {
   signMessage: (message: string) => Promise<string>;
 }
 
+const STORAGE_KEY_ADDRESS = 'pacfi_wallet_address';
+
+const readStoredAddress = (): string | null => {
+  if (typeof window === 'undefined') return null;
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY_ADDRESS);
+    return stored && isValidSolanaAddress(stored) ? stored : null;
+  } catch {
+    return null;
+  }
+};
+
 export const useWalletContext = (): WalletContextType => {
-  const [walletAddress, setWalletAddress] = useState<string | null>(null);
-  const [isConnected, setIsConnected] = useState(false);
+  const [walletAddress, setWalletAddress] = useState<string | null>(readStoredAddress);
+  const [isConnected, setIsConnected] = useState<boolean>(() => Boolean(readStoredAddress()));
   const [isConnecting, setIsConnecting] = useState(false);
 
   const getProvider = useCallback(() => {
@@ -57,28 +69,28 @@ export const useWalletContext = (): WalletContextType => {
 
   const syncWalletState = useCallback(() => {
     const resolved = getProvider();
+
     if (!resolved) {
-      setWalletAddress(null);
-      setIsConnected(false);
+      // No wallet extension installed — keep localStorage state as-is
       return;
     }
 
     const rawAddress = resolved.provider?.publicKey?.toBase58?.() ?? null;
-
     const currentAddress = rawAddress && isValidSolanaAddress(rawAddress) ? rawAddress : null;
-    const connected = Boolean(resolved.provider?.isConnected && currentAddress);
+    const providerConnected = resolved.provider?.isConnected;
 
-    console.log(
-      '[Wallet] Sync state - raw:',
-      rawAddress,
-      'valid:',
-      currentAddress,
-      'connected:',
-      connected
-    );
-
-    setWalletAddress(currentAddress);
-    setIsConnected(connected);
+    if (currentAddress && providerConnected) {
+      // Provider confirms connected — update state and localStorage
+      localStorage.setItem(STORAGE_KEY_ADDRESS, currentAddress);
+      setWalletAddress(currentAddress);
+      setIsConnected(true);
+    } else if (providerConnected === false) {
+      // Provider explicitly says disconnected — clear everything
+      localStorage.removeItem(STORAGE_KEY_ADDRESS);
+      setWalletAddress(null);
+      setIsConnected(false);
+    }
+    // If providerConnected is undefined/null (not yet initialized), keep current localStorage state
   }, [getProvider]);
 
   useEffect(() => {
@@ -129,6 +141,8 @@ export const useWalletContext = (): WalletContextType => {
       }
 
       console.log('[Wallet] Connected with address:', nextAddress);
+      localStorage.setItem(STORAGE_KEY_ADDRESS, nextAddress);
+      localStorage.setItem('pacfi_wallet_provider', resolved.key);
       setWalletAddress(nextAddress);
       setIsConnected(true);
       emitWalletChanged();
@@ -145,6 +159,8 @@ export const useWalletContext = (): WalletContextType => {
       await resolved.provider.disconnect();
     }
 
+    localStorage.removeItem(STORAGE_KEY_ADDRESS);
+    localStorage.removeItem('pacfi_wallet_provider');
     setWalletAddress(null);
     setIsConnected(false);
     emitWalletChanged();
@@ -201,10 +217,6 @@ export default function WalletConnect({ onConnect, onDisconnect }: WalletConnect
       disconnect();
     }
   }, [mounted, isConnected, walletAddress, disconnect]);
-
-  useEffect(() => {
-    setMounted(true);
-  }, []);
 
   useEffect(() => {
     if (isConnected && walletAddress) {
