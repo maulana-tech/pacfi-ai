@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s \"https://test-api.pacifica.fi/api/v1/leaderboard\")",
+      "Bash(pnpm type-check:*)",
+      "Bash(curl -s \"https://test-api.pacifica.fi/api/v1/info\")",
+      "Bash(curl -s \"https://test-api.pacifica.fi/api/v1/book?symbol=BTC&agg_level=1\")",
+      "Bash(curl -s \"https://test-api.pacifica.fi/api/v1/ticker\")",
+      "Bash(curl -s \"https://test-api.pacifica.fi/api/v1/tickers\")",
+      "Bash(curl -s \"https://test-api.pacifica.fi/api/v1/prices\")",
+      "Bash(curl -s \"https://test-api.pacifica.fi/api/v1/orderbook?symbol=BTC\")",
+      "Bash(curl -s \"https://test-api.pacifica.fi/api/v1/market?symbol=BTC\")",
+      "Bash(curl -s \"https://test-api.pacifica.fi/api/v1/markets\")",
+      "Bash(curl -s \"https://test-api.pacifica.fi/api/v1/mark_prices\")",
+      "Bash(curl -s \"https://test-api.pacifica.fi/api/v1/summary\")",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(list\\(d.get\\('data',[{}]\\)[0].keys\\(\\)\\)\\)\")",
+      "Bash(curl -s \"https://test-api.pacifica.fi/api/v1/trades?symbol=BTC\")",
+      "Bash(curl -s \"https://test-api.pacifica.fi/api/v1/candles?symbol=BTC&interval=1m&limit=2\")",
+      "Bash(curl -s \"https://test-api.pacifica.fi/api/v1/book?symbol=ETH&agg_level=1\")",
+      "Bash(curl -s \"https://test-api.pacifica.fi/api/v1/book?symbol=SOL&agg_level=1\")",
+      "Bash(pnpm --filter @pacfi/frontend add lightweight-charts)",
+      "Bash(node:*)"
+    ]
+  }
+}
