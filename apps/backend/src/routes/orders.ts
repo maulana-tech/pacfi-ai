@@ -123,7 +123,10 @@ router.post('/create-market', async (c) => {
     }
 
     if (builderCode && !isValidBuilderCode(builderCode)) {
-      return c.json(errorEnvelope('Invalid builder code format. Use 1-16 alphanumeric characters.'), 400);
+      return c.json(
+        errorEnvelope('Invalid builder code format. Use 1-16 alphanumeric characters.'),
+        400
+      );
     }
 
     const auth = getOrderAuth(wallet, body);
@@ -178,7 +181,10 @@ router.post('/create-limit', async (c) => {
     }
 
     if (builderCode && !isValidBuilderCode(builderCode)) {
-      return c.json(errorEnvelope('Invalid builder code format. Use 1-16 alphanumeric characters.'), 400);
+      return c.json(
+        errorEnvelope('Invalid builder code format. Use 1-16 alphanumeric characters.'),
+        400
+      );
     }
 
     const auth = getOrderAuth(wallet, body);
@@ -291,52 +297,64 @@ router.get('/market-data', async (c) => {
       },
     };
 
-    let marketDataMap: Record<string, any> = {};
+    const marketDataMap: Record<string, any> = {};
+
+    const formatVolume = (value: number): string => {
+      if (value >= 1_000_000_000) return `$${(value / 1_000_000_000).toFixed(1)}B`;
+      if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`;
+      if (value >= 1_000) return `$${(value / 1_000).toFixed(1)}K`;
+      return `$${value.toFixed(2)}`;
+    };
 
     try {
-      // Attempt to fetch market info from Pacifica
-      const marketInfo = await pacificaClient.getPrices();
-
-      if (Array.isArray(marketInfo) && marketInfo.length > 0) {
-        // Transform Pacifica data to our format
-        for (const market of marketInfo) {
-          const symbol = market.s || market.symbol;
-          if (symbol && requestedSymbols.some((s) => symbol.includes(s))) {
-            const baseSymbol = symbol.split('/')[0] || symbol;
-
-            const price = parseFloat(market.price || market.c || '0');
-            const high24h = parseFloat(market.h24 || market.high || price);
-            const low24h = parseFloat(market.l24 || market.low || price);
-            const change24h =
-              high24h > 0 && low24h > 0 ? ((price - low24h) / low24h) * 100 : 0;
-
-            const volume = parseFloat(market.v24 || market.v || '0');
-            const volumeStr =
-              volume > 1000000000
-                ? `$${(volume / 1000000000).toFixed(1)}B`
-                : volume > 1000000
-                  ? `$${(volume / 1000000).toFixed(1)}M`
-                  : `$${(volume / 1000).toFixed(1)}K`;
-
-            const fundingRatePercent = parseFloat(market.fr || market.fundingRate || '0');
-            const fundingRateStr = `${fundingRatePercent >= 0 ? '+' : ''}${fundingRatePercent.toFixed(4)}%`;
-
-            if (price > 0) {
-              // Only include if we have valid price data
-              marketDataMap[baseSymbol] = {
-                price,
-                change: parseFloat(change24h.toFixed(2)),
-                high: high24h,
-                low: low24h,
-                volume: volumeStr,
-                fundingRate: fundingRateStr,
-              };
-            }
+      // Use recent trades for each symbol to build a reliable live snapshot.
+      await Promise.all(
+        requestedSymbols.map(async (symbol) => {
+          const tradesData = await pacificaClient.getRecentTrades(symbol);
+          if (!Array.isArray(tradesData) || tradesData.length === 0) {
+            return;
           }
-        }
-      }
+
+          const prices = tradesData
+            .map((item) => Number.parseFloat(item.price))
+            .filter((value) => Number.isFinite(value) && value > 0);
+
+          if (prices.length === 0) {
+            return;
+          }
+
+          const amounts = tradesData
+            .map((item) => Number.parseFloat(item.amount))
+            .filter((value) => Number.isFinite(value) && value > 0);
+
+          const latestPrice = prices[0];
+          const previousPrice = prices[1] ?? latestPrice;
+          const high = Math.max(...prices);
+          const low = Math.min(...prices);
+          const totalNotional = tradesData.reduce((acc, item) => {
+            const p = Number.parseFloat(item.price);
+            const a = Number.parseFloat(item.amount);
+            if (!Number.isFinite(p) || !Number.isFinite(a)) {
+              return acc;
+            }
+            return acc + p * a;
+          }, 0);
+
+          const change =
+            previousPrice > 0 ? ((latestPrice - previousPrice) / previousPrice) * 100 : 0;
+
+          marketDataMap[symbol] = {
+            price: latestPrice,
+            change: Number.parseFloat(change.toFixed(2)),
+            high,
+            low,
+            volume: formatVolume(totalNotional),
+            fundingRate: 'N/A',
+          };
+        })
+      );
     } catch (error) {
-      console.warn('[Orders] Pacifica API fetch failed, using fallback data:', error);
+      console.warn('[Orders] Pacifica trades fetch failed, using fallback data:', error);
     }
 
     // Fill in missing symbols with defaults
