@@ -11,6 +11,7 @@ import { dashboardRouter } from './routes/dashboard';
 import { builderRouter } from './routes/builder';
 import { agentRouter } from './routes/agent';
 import { marketsRouter } from './routes/markets';
+import { swarmRouter } from './routes/swarm';
 import { errorEnvelope } from './lib/api';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -29,6 +30,7 @@ app.route('/orders', ordersRouter);
 app.route('/dashboard', dashboardRouter);
 app.route('/builder', builderRouter);
 app.route('/agent', agentRouter);
+app.route('/swarm', swarmRouter);
 
 // 404 handler
 app.notFound((c) => {

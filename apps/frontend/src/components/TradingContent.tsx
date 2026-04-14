@@ -9,14 +9,39 @@ import {
   fetchBuilderApprovals,
   AgentStatus,
   pacificaRequest,
+  fetchPacificaMarketData,
+  MarketDataMap,
 } from '../lib/pacifica';
 
 const SYMBOLS = ['BTC', 'ETH', 'SOL'] as const;
-const MARKET = {
-  BTC: { price: 45230.5, change: 2.34, high: 45890, low: 44120, volume: '$2.4B', fundingRate: '0.0082%' },
-  ETH: { price: 2845.2, change: -1.12, high: 2920, low: 2800, volume: '$1.1B', fundingRate: '-0.0031%' },
-  SOL: { price: 145.3, change: 4.21, high: 148, low: 138.5, volume: '$380M', fundingRate: '0.0120%' },
-} as const;
+
+// Mock data for fallback
+const DEFAULT_MARKET_DATA: MarketDataMap = {
+  BTC: {
+    price: 45230.5,
+    change: 2.34,
+    high: 45890,
+    low: 44120,
+    volume: '$2.4B',
+    fundingRate: '0.0082%',
+  },
+  ETH: {
+    price: 2845.2,
+    change: -1.12,
+    high: 2920,
+    low: 2800,
+    volume: '$1.1B',
+    fundingRate: '-0.0031%',
+  },
+  SOL: {
+    price: 145.3,
+    change: 4.21,
+    high: 148,
+    low: 138.5,
+    volume: '$380M',
+    fundingRate: '0.0120%',
+  },
+};
 
 export default function TradingContent() {
   const { walletAddress, isConnected, signMessage } = useWalletContext();
@@ -32,7 +57,8 @@ export default function TradingContent() {
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
-  const market = MARKET[selectedSymbol];
+  const [marketData, setMarketData] = useState<MarketDataMap>(DEFAULT_MARKET_DATA);
+  const market = marketData[selectedSymbol] || DEFAULT_MARKET_DATA[selectedSymbol];
 
   useEffect(() => {
     fetchAgentStatus()
@@ -67,6 +93,34 @@ export default function TradingContent() {
       setExecutionMode('wallet');
     }
   }, [agentStatus, executionMode, walletAddress]);
+
+  // Fetch real-time market data on mount and refresh every 5 seconds
+  useEffect(() => {
+    let isMounted = true;
+
+    const fetchMarketData = async () => {
+      try {
+        const data = await fetchPacificaMarketData(SYMBOLS as unknown as string[], true);
+        if (isMounted) {
+          setMarketData(data);
+        }
+      } catch (error) {
+        console.warn('Failed to fetch market data:', error);
+        // Keep existing data or fallback to defaults
+      }
+    };
+
+    // Fetch immediately on mount
+    fetchMarketData();
+
+    // Set up interval for continuous refresh (every 5 seconds)
+    const interval = setInterval(fetchMarketData, 5000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -179,8 +233,8 @@ export default function TradingContent() {
           <p style={{ fontSize: 14, lineHeight: 1.7, color: '#CBD5E1', margin: 0 }}>
             Market order ditandatangani sebagai `create_market_order`, limit order sebagai
             `create_order`, dan builder code yang dipakai di order diambil dari approval yang sudah
-            ada di halaman Builder. Jika agent wallet backend aktif untuk account ini, order juga bisa
-            dijalankan tanpa popup signature wallet.
+            ada di halaman Builder. Jika agent wallet backend aktif untuk account ini, order juga
+            bisa dijalankan tanpa popup signature wallet.
           </p>
         </div>
       </div>
@@ -220,11 +274,7 @@ export default function TradingContent() {
                     fontSize: 13,
                     fontWeight: 700,
                     color:
-                      label === '24h'
-                        ? market.change >= 0
-                          ? '#10B981'
-                          : '#EF4444'
-                        : '#111827',
+                      label === '24h' ? (market.change >= 0 ? '#10B981' : '#EF4444') : '#111827',
                   }}
                 >
                   {value}
@@ -237,7 +287,11 @@ export default function TradingContent() {
 
       <div className="trade-grid">
         <div style={{ display: 'grid', gap: 14 }}>
-          <PriceChart symbol={`${selectedSymbol}/USD`} currentPrice={market.price} change24h={market.change} />
+          <PriceChart
+            symbol={`${selectedSymbol}/USD`}
+            currentPrice={market.price}
+            change24h={market.change}
+          />
 
           <div className="card" style={{ padding: 18, display: 'grid', gap: 12 }}>
             <div className="card-title">Approved Builder Codes</div>
@@ -251,7 +305,9 @@ export default function TradingContent() {
               <div className="stat-card" style={{ padding: 14 }}>
                 <div className="stat-label">Connected Wallet</div>
                 <div className="stat-value" style={{ fontSize: 14 }}>
-                  {walletAddress ? `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}` : 'Not connected'}
+                  {walletAddress
+                    ? `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`
+                    : 'Not connected'}
                 </div>
               </div>
               <div className="stat-card" style={{ padding: 14 }}>
@@ -303,14 +359,17 @@ export default function TradingContent() {
                   color: '#6B7280',
                 }}
               >
-                Tidak ada builder code approved. Atur dulu di halaman <a href="/builder">Builder</a>.
+                Tidak ada builder code approved. Atur dulu di halaman <a href="/builder">Builder</a>
+                .
               </div>
             )}
           </div>
         </div>
 
         <div className="card" style={{ padding: 18 }}>
-          <div className="card-title" style={{ marginBottom: 14 }}>Place Order</div>
+          <div className="card-title" style={{ marginBottom: 14 }}>
+            Place Order
+          </div>
           <form onSubmit={handleSubmit} style={{ display: 'grid', gap: 12 }}>
             <div style={{ display: 'grid', gap: 6 }}>
               <div className="input-label">Execution Mode</div>
@@ -329,10 +388,13 @@ export default function TradingContent() {
                         borderRadius: 8,
                         padding: '10px',
                         cursor: isAgentUnavailable ? 'not-allowed' : 'pointer',
-                        border:
-                          executionMode === value ? '1px solid #2563EB' : '1px solid #E5E7EB',
+                        border: executionMode === value ? '1px solid #2563EB' : '1px solid #E5E7EB',
                         background: executionMode === value ? '#EFF6FF' : '#FFF',
-                        color: isAgentUnavailable ? '#9CA3AF' : executionMode === value ? '#2563EB' : '#6B7280',
+                        color: isAgentUnavailable
+                          ? '#9CA3AF'
+                          : executionMode === value
+                            ? '#2563EB'
+                            : '#6B7280',
                         fontWeight: 700,
                       }}
                     >
@@ -354,7 +416,8 @@ export default function TradingContent() {
                     borderRadius: 8,
                     padding: '10px',
                     cursor: 'pointer',
-                    background: side === value ? (value === 'buy' ? '#10B981' : '#EF4444') : '#F3F4F6',
+                    background:
+                      side === value ? (value === 'buy' ? '#10B981' : '#EF4444') : '#F3F4F6',
                     color: side === value ? '#FFF' : '#6B7280',
                     fontWeight: 700,
                   }}

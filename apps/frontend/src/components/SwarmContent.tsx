@@ -1,9 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import SwarmVisualization from './SwarmVisualization';
-import SwarmSkeleton from './SwarmSkeleton';
-
-const API_BASE = import.meta.env.PUBLIC_API_URL || 'http://localhost:3000';
+import { useWalletContext } from './WalletConnect';
 
 interface PacificaMarketData {
   symbol: string;
@@ -18,84 +16,39 @@ interface PacificaMarketData {
   timestamp: number;
 }
 
-interface AgentDecision {
-  action: 'BUY' | 'SELL' | 'HOLD';
+interface SwarmDecision {
+  time: string;
+  symbol: string;
+  action: string;
   confidence: number;
-  reasoning?: string;
-  positionSize?: number;
-  leverage?: number;
-  stopLossPct?: number;
-  riskLevel?: string;
+  result: 'WIN' | 'LOSS' | 'OPEN';
+  pnl: number;
 }
 
-interface AnalyzeResponse {
-  success: boolean;
-  data?: {
-    symbol: string;
-    decision: AgentDecision;
-    marketContext: {
-      symbol: string;
-      currentPrice: number;
-      priceChange24h: number;
-      volume24h: number;
-      fundingRate: number;
-    };
+interface AgentHistoryItem {
+  cycle: string;
+  market_analyst: number;
+  sentiment_agent: number;
+  risk_manager: number;
+  coordinator: number;
+}
+
+interface SwarmHistoryData {
+  decisions: SwarmDecision[];
+  agentHistory: AgentHistoryItem[];
+  stats: {
+    totalCycles: number;
+    avgConfidence: number;
+    winRate: number;
+    activeAgents: number;
   };
-  error?: string;
 }
 
-const AGENT_HISTORY = [
-  { cycle: 'C1', analyst: 82, sentiment: 71, risk: 75, coordinator: 78 },
-  { cycle: 'C2', analyst: 65, sentiment: 58, risk: 70, coordinator: 64 },
-  { cycle: 'C3', analyst: 78, sentiment: 82, risk: 68, coordinator: 76 },
-  { cycle: 'C4', analyst: 91, sentiment: 74, risk: 85, coordinator: 84 },
-  { cycle: 'C5', analyst: 55, sentiment: 62, risk: 60, coordinator: 58 },
-  { cycle: 'C6', analyst: 88, sentiment: 79, risk: 82, coordinator: 83 },
-  { cycle: 'C7', analyst: 72, sentiment: 68, risk: 74, coordinator: 71 },
-];
-
-const RECENT_DECISIONS = [
-  {
-    time: '14:32',
-    symbol: 'BTC/USD',
-    action: 'BUY',
-    confidence: 78,
-    result: 'WIN',
-    pnl: '+$20.53',
-  },
-  {
-    time: '13:15',
-    symbol: 'ETH/USD',
-    action: 'SELL',
-    confidence: 72,
-    result: 'WIN',
-    pnl: '+$51.84',
-  },
-  {
-    time: '12:48',
-    symbol: 'SOL/USD',
-    action: 'BUY',
-    confidence: 65,
-    result: 'OPEN',
-    pnl: '+$14.50',
-  },
-  {
-    time: '11:20',
-    symbol: 'BTC/USD',
-    action: 'SELL',
-    confidence: 80,
-    result: 'WIN',
-    pnl: '+$15.00',
-  },
-  {
-    time: '10:05',
-    symbol: 'ETH/USD',
-    action: 'BUY',
-    confidence: 58,
-    result: 'LOSS',
-    pnl: '-$72.00',
-  },
-];
+interface ApiEnvelope<T> {
+  success: boolean;
+  data: T;
+  error: string | null;
+}
 
 interface Agent {
   id: string;
@@ -107,6 +60,8 @@ interface Agent {
   reasoning?: string;
   color: string;
 }
+
+const API_URL = import.meta.env.PUBLIC_API_URL ?? 'http://localhost:3001';
 
 const INITIAL_AGENTS: Agent[] = [
   {
@@ -201,6 +156,7 @@ const MOCK_CYCLES = [
 ];
 
 export default function SwarmContent() {
+  const { walletAddress, isConnected } = useWalletContext();
   const [agents, setAgents] = useState<Agent[]>(INITIAL_AGENTS);
   const [isRunning, setIsRunning] = useState(false);
   const [finalDecision, setFinalDecision] = useState<{
@@ -212,10 +168,51 @@ export default function SwarmContent() {
   const [lastRun, setLastRun] = useState<string | null>(null);
   const [marketData, setMarketData] = useState<PacificaMarketData[]>([]);
 
+  const [swarmHistory, setSwarmHistory] = useState<SwarmHistoryData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchSwarmHistory = async () => {
+    if (!isConnected || !walletAddress) {
+      setLoading(false);
+      setError('Connect your wallet to view swarm history.');
+      return;
+    }
+    try {
+      setError(null);
+      setLoading(true);
+      const res = await fetch(`${API_URL}/dashboard/swarm-history`, {
+        headers: { 'X-Wallet-Address': walletAddress },
+      });
+      const json = (await res.json()) as ApiEnvelope<SwarmHistoryData>;
+      if (json.success) {
+        setSwarmHistory(json.data);
+      } else {
+        setError(json.error ?? 'Failed to load swarm history.');
+      }
+    } catch {
+      setError('Network error. Please retry.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    const fetchMarketData = async () => {
+    fetchSwarmHistory();
+  }, [isConnected, walletAddress]);
+
+  useEffect(() => {
+    if (!isConnected || !walletAddress) {
+      return;
+    }
+    const interval = setInterval(fetchSwarmHistory, 30000);
+    return () => clearInterval(interval);
+  }, [isConnected, walletAddress]);
+
+  useEffect(() => {
+    const fetchMarketDataFn = async () => {
       try {
-        const res = await fetch('https://test-api.pacifica.fi/api/v1/info');
+        const res = await fetch('https://test-api.pacifica.fi/api/v1/info/prices');
         const json = (await res.json()) as { success: boolean; data: PacificaMarketData[] };
         if (json.success && Array.isArray(json.data)) {
           setMarketData(json.data);
@@ -224,8 +221,8 @@ export default function SwarmContent() {
         console.error('[SwarmContent] Failed to fetch market data:', err);
       }
     };
-    fetchMarketData();
-    const interval = setInterval(fetchMarketData, 30000);
+    fetchMarketDataFn();
+    const interval = setInterval(fetchMarketDataFn, 30000);
     return () => clearInterval(interval);
   }, []);
 
@@ -246,101 +243,75 @@ export default function SwarmContent() {
 
     setIsRunning(true);
     setFinalDecision(null);
+
+    const cycle = MOCK_CYCLES[cycleIndex % MOCK_CYCLES.length];
     setCycleIndex((i) => i + 1);
 
-    setAgents(
-      INITIAL_AGENTS.map((a) => ({
-        ...a,
-        status: 'analyzing' as const,
-        decision: undefined,
-        confidence: undefined,
-        reasoning: undefined,
-      }))
-    );
+    setAgents(INITIAL_AGENTS.map((a) => ({ ...a, status: 'idle' as const })));
 
-    try {
-      const response = await fetch(`${API_BASE}/agent/analyze`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ symbol: 'BTC', portfolioBalance: 10000 }),
-      });
+    for (let i = 0; i < cycle.agents.length; i++) {
+      const agentData = cycle.agents[i];
 
-      const result: AnalyzeResponse = await response.json();
+      setAgents((prev) =>
+        prev.map((a) => (a.id === agentData.id ? { ...a, status: 'analyzing' as const } : a))
+      );
 
-      if (result.success && result.data) {
-        const { decision, marketContext } = result.data;
+      await new Promise((r) => setTimeout(r, 1200));
 
-        setAgents([
-          {
-            id: 'fundamentals',
-            name: 'Fundamentals',
-            role: 'Tokenomics & Project',
-            status: 'done' as const,
-            decision: decision.action,
-            confidence: Math.round(decision.confidence * 0.9),
-            reasoning: 'Analyzed market conditions',
-            color: '#2563EB',
-          },
-          {
-            id: 'sentiment',
-            name: 'Sentiment',
-            role: 'Market Sentiment',
-            status: 'done' as const,
-            decision: decision.action,
-            confidence: Math.round(decision.confidence * 0.85),
-            reasoning: `Funding rate: ${marketContext.fundingRate}%`,
-            color: '#7C3AED',
-          },
-          {
-            id: 'technical',
-            name: 'Technical',
-            role: 'Price Action',
-            status: 'done' as const,
-            decision: decision.action,
-            confidence: decision.confidence,
-            reasoning: `Price: $${marketContext.currentPrice.toFixed(2)}`,
-            color: '#0891B2',
-          },
-          {
-            id: 'risk',
-            name: 'Risk Manager',
-            role: 'Position Sizing',
-            status: 'done' as const,
-            decision: decision.action,
-            confidence: Math.round(decision.confidence * 0.95),
-            reasoning: `Risk: ${decision.riskLevel || 'MEDIUM'}`,
-            color: '#059669',
-          },
-        ]);
+      setAgents((prev) =>
+        prev.map((a) =>
+          a.id === agentData.id
+            ? {
+                ...a,
+                status: 'done' as const,
+                decision: agentData.decision,
+                confidence: agentData.confidence,
+                reasoning: agentData.reasoning,
+              }
+            : a
+        )
+      );
 
-        setFinalDecision({
-          action: decision.action,
-          confidence: decision.confidence,
-          leverage: decision.leverage || 1,
-        });
-      } else {
-        console.error('Analyze failed:', result.error);
-        setAgents(INITIAL_AGENTS.map((a) => ({ ...a, status: 'idle' as const })));
-      }
-    } catch (err) {
-      console.error('Failed to run cycle:', err);
-      setAgents(INITIAL_AGENTS.map((a) => ({ ...a, status: 'idle' as const })));
+      await new Promise((r) => setTimeout(r, 300));
     }
 
+    setFinalDecision(cycle.final);
     setLastRun(new Date().toLocaleTimeString());
     setIsRunning(false);
   };
+
+  const stats =
+    swarmHistory && !loading && !error
+      ? [
+          { label: 'Total Cycles', value: String(swarmHistory.stats.totalCycles), sub: 'All time' },
+          {
+            label: 'Avg. Confidence',
+            value: `${swarmHistory.stats.avgConfidence.toFixed(1)}%`,
+            sub: 'Last 30 days',
+          },
+          {
+            label: 'Swarm Win Rate',
+            value: `${swarmHistory.stats.winRate.toFixed(1)}%`,
+            sub: 'Based on decisions',
+          },
+          {
+            label: 'Active Agents',
+            value: `${swarmHistory.stats.activeAgents}/4`,
+            sub: 'All online',
+          },
+        ]
+      : [
+          { label: 'Total Cycles', value: '-', sub: 'All time' },
+          { label: 'Avg. Confidence', value: '-', sub: 'Last 30 days' },
+          { label: 'Swarm Win Rate', value: '-', sub: 'Based on decisions' },
+          { label: 'Active Agents', value: '-', sub: 'All online' },
+        ];
 
   return (
     <div style={{ padding: '24px 28px', display: 'flex', flexDirection: 'column', gap: 16 }}>
       {/* Stats row */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14 }}>
-        {[
-          { label: 'Total Cycles', value: '142', sub: 'All time' },
-          { label: 'Avg. Confidence', value: '72.4%', sub: 'Last 30 days' },
-          { label: 'Swarm Win Rate', value: '68.5%', sub: 'Based on decisions' },
-          { label: 'Active Agents', value: '4/4', sub: 'All online' },
-        ].map((s) => (
+        {stats.map((s) => (
           <div key={s.label} className="stat-card">
             <div className="stat-label">{s.label}</div>
             <div className="stat-value num">{s.value}</div>
@@ -445,107 +416,84 @@ export default function SwarmContent() {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
         <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
           <div style={{ padding: '16px 20px', borderBottom: '1px solid #F3F4F6' }}>
-            <span className="card-title">Agent Status</span>
+            <span className="card-title">Agent History (Last 7 Cycles)</span>
           </div>
-          <div style={{ padding: '12px 20px' }}>
-            {agents.map((agent, idx) => (
+          <div style={{ padding: '16px 20px' }}>
+            {!isConnected ? (
               <div
-                key={agent.id}
                 style={{
+                  height: 200,
                   display: 'flex',
-                  alignItems: 'flex-start',
-                  gap: 12,
-                  padding: '10px 0',
-                  borderBottom: idx < agents.length - 1 ? '1px solid #F9FAFB' : 'none',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#9CA3AF',
                 }}
               >
-                <div style={{ paddingTop: 2 }}>
-                  <span
-                    className="dot"
-                    style={{
-                      background: getStatusColor(agent.status),
-                      boxShadow:
-                        agent.status === 'analyzing'
-                          ? '0 0 0 3px rgba(245,158,11,0.15)'
-                          : agent.status === 'done'
-                            ? '0 0 0 3px rgba(16,185,129,0.15)'
-                            : 'none',
-                      transition: 'all 0.3s',
+                Connect wallet to view agent history
+              </div>
+            ) : loading ? (
+              <div className="skeleton" style={{ height: 200, borderRadius: 10 }} />
+            ) : error ? (
+              <div
+                style={{
+                  height: 200,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#EF4444',
+                }}
+              >
+                {error}
+              </div>
+            ) : swarmHistory && swarmHistory.agentHistory.length > 0 ? (
+              <ResponsiveContainer width="100%" height={200}>
+                <BarChart data={swarmHistory.agentHistory}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" vertical={false} />
+                  <XAxis
+                    dataKey="cycle"
+                    tick={{ fontSize: 10, fill: '#9CA3AF' }}
+                    tickLine={false}
+                    axisLine={false}
+                  />
+                  <YAxis
+                    tick={{ fontSize: 10, fill: '#9CA3AF' }}
+                    tickLine={false}
+                    axisLine={false}
+                    domain={[0, 100]}
+                  />
+                  <Tooltip
+                    formatter={(v: number) => `${v}%`}
+                    contentStyle={{
+                      background: '#FFF',
+                      border: '1px solid #E5E7EB',
+                      borderRadius: 6,
+                      fontSize: 11,
                     }}
                   />
-                </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
-                    <span style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>
-                      {agent.name}
-                    </span>
-                    <span style={{ fontSize: 11, color: '#9CA3AF' }}>{agent.role}</span>
-                  </div>
-                  {agent.status === 'analyzing' && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <div
-                        className="skeleton"
-                        style={{ height: 10, width: 140, borderRadius: 4 }}
-                      />
-                    </div>
-                  )}
-                  {agent.status === 'done' && agent.reasoning && (
-                    <p
-                      style={{
-                        fontSize: 11,
-                        color: '#6B7280',
-                        lineHeight: 1.4,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                        maxWidth: '100%',
-                      }}
-                    >
-                      {agent.reasoning}
-                    </p>
-                  )}
-                  {agent.status === 'idle' && (
-                    <p style={{ fontSize: 11, color: '#D1D5DB' }}>Waiting...</p>
-                  )}
-                </div>
-                {agent.status === 'done' && agent.decision && (
-                  <div
-                    style={{
-                      display: 'flex',
-                      flexDirection: 'column',
-                      alignItems: 'flex-end',
-                      gap: 3,
-                    }}
-                  >
-                    <span
-                      className="badge"
-                      style={{
-                        background:
-                          agent.decision === 'BUY'
-                            ? '#ECFDF5'
-                            : agent.decision === 'SELL'
-                              ? '#FEF2F2'
-                              : '#F3F4F6',
-                        color:
-                          agent.decision === 'BUY'
-                            ? '#059669'
-                            : agent.decision === 'SELL'
-                              ? '#DC2626'
-                              : '#6B7280',
-                      }}
-                    >
-                      {agent.decision}
-                    </span>
-                    <span
-                      className="num"
-                      style={{ fontSize: 11, color: '#9CA3AF', fontWeight: 600 }}
-                    >
-                      {agent.confidence}%
-                    </span>
-                  </div>
-                )}
+                  <Bar dataKey="market_analyst" stackId="a" fill="#2563EB" name="Market Analyst" />
+                  <Bar
+                    dataKey="sentiment_agent"
+                    stackId="a"
+                    fill="#7C3AED"
+                    name="Sentiment Agent"
+                  />
+                  <Bar dataKey="risk_manager" stackId="a" fill="#0891B2" name="Risk Manager" />
+                  <Bar dataKey="coordinator" stackId="a" fill="#059669" name="Coordinator" />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div
+                style={{
+                  height: 200,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#9CA3AF',
+                }}
+              >
+                No agent history yet
               </div>
-            ))}
+            )}
           </div>
         </div>
 
@@ -565,61 +513,99 @@ export default function SwarmContent() {
               </tr>
             </thead>
             <tbody>
-              {RECENT_DECISIONS.map((d, i) => (
-                <tr key={i}>
-                  <td>
-                    <span style={{ fontSize: 12, color: '#9CA3AF' }}>{d.time}</span>
-                  </td>
-                  <td>
-                    <span style={{ fontWeight: 600, color: '#111827' }}>{d.symbol}</span>
-                  </td>
-                  <td>
-                    <span className={d.action === 'BUY' ? 'badge badge-buy' : 'badge badge-sell'}>
-                      {d.action}
-                    </span>
-                  </td>
-                  <td style={{ textAlign: 'right' }}>
-                    <span
-                      className="num"
-                      style={{ fontSize: 12, fontWeight: 600, color: '#374151' }}
-                    >
-                      {d.confidence}%
-                    </span>
-                  </td>
-                  <td>
-                    <span
-                      className="badge"
-                      style={{
-                        background:
-                          d.result === 'WIN'
-                            ? '#ECFDF5'
-                            : d.result === 'LOSS'
-                              ? '#FEF2F2'
-                              : '#EFF6FF',
-                        color:
-                          d.result === 'WIN'
-                            ? '#059669'
-                            : d.result === 'LOSS'
-                              ? '#DC2626'
-                              : '#2563EB',
-                      }}
-                    >
-                      {d.result}
-                    </span>
-                  </td>
-                  <td style={{ textAlign: 'right' }}>
-                    <span
-                      className="num"
-                      style={{
-                        fontWeight: 700,
-                        color: d.pnl.startsWith('+') ? '#10B981' : '#EF4444',
-                      }}
-                    >
-                      {d.pnl}
-                    </span>
+              {!isConnected ? (
+                <tr>
+                  <td
+                    colSpan={6}
+                    style={{ textAlign: 'center', padding: '20px', color: '#9CA3AF' }}
+                  >
+                    Connect wallet to view decisions
                   </td>
                 </tr>
-              ))}
+              ) : loading ? (
+                <tr>
+                  <td
+                    colSpan={6}
+                    style={{ textAlign: 'center', padding: '20px', color: '#9CA3AF' }}
+                  >
+                    Loading...
+                  </td>
+                </tr>
+              ) : error ? (
+                <tr>
+                  <td
+                    colSpan={6}
+                    style={{ textAlign: 'center', padding: '20px', color: '#EF4444' }}
+                  >
+                    {error}
+                  </td>
+                </tr>
+              ) : swarmHistory && swarmHistory.decisions.length > 0 ? (
+                swarmHistory.decisions.map((d, i) => (
+                  <tr key={i}>
+                    <td>
+                      <span style={{ fontSize: 12, color: '#9CA3AF' }}>{d.time}</span>
+                    </td>
+                    <td>
+                      <span style={{ fontWeight: 600, color: '#111827' }}>{d.symbol}</span>
+                    </td>
+                    <td>
+                      <span className={d.action === 'BUY' ? 'badge badge-buy' : 'badge badge-sell'}>
+                        {d.action}
+                      </span>
+                    </td>
+                    <td style={{ textAlign: 'right' }}>
+                      <span
+                        className="num"
+                        style={{ fontSize: 12, fontWeight: 600, color: '#374151' }}
+                      >
+                        {d.confidence}%
+                      </span>
+                    </td>
+                    <td>
+                      <span
+                        className="badge"
+                        style={{
+                          background:
+                            d.result === 'WIN'
+                              ? '#ECFDF5'
+                              : d.result === 'LOSS'
+                                ? '#FEF2F2'
+                                : '#EFF6FF',
+                          color:
+                            d.result === 'WIN'
+                              ? '#059669'
+                              : d.result === 'LOSS'
+                                ? '#DC2626'
+                                : '#2563EB',
+                        }}
+                      >
+                        {d.result}
+                      </span>
+                    </td>
+                    <td style={{ textAlign: 'right' }}>
+                      <span
+                        className="num"
+                        style={{
+                          fontWeight: 700,
+                          color: d.pnl >= 0 ? '#10B981' : '#EF4444',
+                        }}
+                      >
+                        {d.pnl >= 0 ? '+' : ''}${d.pnl.toFixed(2)}
+                      </span>
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td
+                    colSpan={6}
+                    style={{ textAlign: 'center', padding: '20px', color: '#9CA3AF' }}
+                  >
+                    No decisions yet
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
