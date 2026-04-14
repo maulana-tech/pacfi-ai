@@ -9,10 +9,14 @@ import {
   fetchBuilderApprovals,
   AgentStatus,
   pacificaRequest,
+  fetchPacificaMarketData,
+  MarketDataMap,
 } from '../lib/pacifica';
 
 const SYMBOLS = ['BTC', 'ETH', 'SOL'] as const;
-const MARKET = {
+
+// Mock data for fallback
+const DEFAULT_MARKET_DATA: MarketDataMap = {
   BTC: {
     price: 45230.5,
     change: 2.34,
@@ -37,7 +41,7 @@ const MARKET = {
     volume: '$380M',
     fundingRate: '0.0120%',
   },
-} as const;
+};
 
 export default function TradingContent() {
   const { walletAddress, isConnected, signMessage } = useWalletContext();
@@ -53,7 +57,8 @@ export default function TradingContent() {
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
-  const market = MARKET[selectedSymbol];
+  const [marketData, setMarketData] = useState<MarketDataMap>(DEFAULT_MARKET_DATA);
+  const market = marketData[selectedSymbol] || DEFAULT_MARKET_DATA[selectedSymbol];
 
   useEffect(() => {
     fetchAgentStatus()
@@ -88,6 +93,34 @@ export default function TradingContent() {
       setExecutionMode('wallet');
     }
   }, [agentStatus, executionMode, walletAddress]);
+
+  // Fetch real-time market data on mount and refresh every 5 seconds
+  useEffect(() => {
+    let isMounted = true;
+
+    const fetchMarketData = async () => {
+      try {
+        const data = await fetchPacificaMarketData(SYMBOLS as unknown as string[]);
+        if (isMounted) {
+          setMarketData(data);
+        }
+      } catch (error) {
+        console.warn('Failed to fetch market data:', error);
+        // Keep existing data or fallback to defaults
+      }
+    };
+
+    // Fetch immediately on mount
+    fetchMarketData();
+
+    // Set up interval for continuous refresh (every 5 seconds)
+    const interval = setInterval(fetchMarketData, 5000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();

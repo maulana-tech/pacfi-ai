@@ -127,3 +127,99 @@ export async function fetchAgentStatus(): Promise<AgentStatus> {
 
   return payload.data as AgentStatus;
 }
+
+// Market data types and fetching
+export type MarketData = {
+  price: number;
+  change: number;      // 24h change percentage
+  high: number;        // 24h high
+  low: number;         // 24h low
+  volume: string;      // Volume display string
+  fundingRate: string; // Funding rate display string
+};
+
+export type MarketDataMap = Record<string, MarketData>;
+
+// Cache for market data (5 second TTL for real-time responsiveness)
+let marketDataCache: {
+  data: MarketDataMap;
+  timestamp: number;
+} | null = null;
+
+const CACHE_TTL_MS = 5000; // 5 seconds
+
+const DEFAULT_MARKET_DATA: MarketDataMap = {
+  BTC: {
+    price: 45230.5,
+    change: 2.34,
+    high: 45890,
+    low: 44120,
+    volume: '$2.4B',
+    fundingRate: '0.0082%',
+  },
+  ETH: {
+    price: 2845.2,
+    change: -1.12,
+    high: 2920,
+    low: 2800,
+    volume: '$1.1B',
+    fundingRate: '-0.0031%',
+  },
+  SOL: {
+    price: 145.3,
+    change: 4.21,
+    high: 148,
+    low: 138.5,
+    volume: '$380M',
+    fundingRate: '0.0120%',
+  },
+};
+
+/**
+ * Fetch real-time market data from Pacifica
+ * Falls back to mock data if API is unavailable
+ */
+export async function fetchPacificaMarketData(
+  symbols: string[] = ['BTC', 'ETH', 'SOL'],
+  forceRefresh: boolean = false
+): Promise<MarketDataMap> {
+  // Return cached data if fresh and not forcing refresh
+  if (!forceRefresh && marketDataCache && Date.now() - marketDataCache.timestamp < CACHE_TTL_MS) {
+    return marketDataCache.data;
+  }
+
+  try {
+    // Fetch from backend endpoint that aggregates Pacifica market data
+    const response = await fetch(`${API_BASE}/orders/market-data?symbols=${symbols.join(',')}`);
+    
+    if (!response.ok) {
+      throw new Error('Market data API failed');
+    }
+
+    const payload = await response.json();
+    
+    if (payload.success === false || !payload.data) {
+      throw new Error('Invalid market data response');
+    }
+
+    const marketData: MarketDataMap = payload.data;
+
+    // Update cache
+    marketDataCache = {
+      data: marketData,
+      timestamp: Date.now(),
+    };
+
+    return marketData;
+  } catch (error) {
+    console.warn('Failed to fetch real-time market data from Pacifica, using fallback:', error);
+    
+    // Return cached data if available, otherwise fallback to mock
+    if (marketDataCache) {
+      return marketDataCache.data;
+    }
+
+    // Use mock data as final fallback
+    return DEFAULT_MARKET_DATA;
+  }
+}
