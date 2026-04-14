@@ -43,10 +43,10 @@ interface LeaderboardTeaserEntry {
   rank: number;
   walletAddress: string;
   username?: string | null;
-  totalROI: number;
-  winRate: number;
-  totalTrades: number;
-  updatedAt: string;
+  pnl: number;
+  equity: number;
+  volume: number;
+  openInterest: number;
 }
 
 interface SwarmStatusResponse {
@@ -417,15 +417,28 @@ export default function DashboardContent() {
                   <span style={{ fontSize: 11, color: '#9CA3AF', fontWeight: 700 }}>
                     #{entry.rank}
                   </span>
-                  <span style={{ fontSize: 11, color: '#10B981', fontWeight: 700 }}>
-                    {formatPercent(entry.totalROI)}
+                  <span
+                    style={{
+                      fontSize: 11,
+                      fontWeight: 700,
+                      color: entry.pnl >= 0 ? '#10B981' : '#EF4444',
+                    }}
+                  >
+                    {entry.pnl >= 0 ? '+' : ''}
+                    ${Math.abs(entry.pnl) >= 1000
+                      ? `${(Math.abs(entry.pnl) / 1000).toFixed(1)}K`
+                      : Math.abs(entry.pnl).toFixed(0)}
                   </span>
                 </div>
                 <div style={{ fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 4 }}>
                   {entry.username || shortWallet(entry.walletAddress)}
                 </div>
                 <div style={{ fontSize: 11, color: '#9CA3AF' }}>
-                  Win rate {entry.winRate.toFixed(1)}% | {entry.totalTrades} trades
+                  Equity ${entry.equity >= 1_000_000
+                    ? `${(entry.equity / 1_000_000).toFixed(1)}M`
+                    : entry.equity >= 1_000
+                      ? `${(entry.equity / 1_000).toFixed(0)}K`
+                      : entry.equity.toFixed(0)}
                 </div>
               </div>
             ))}
