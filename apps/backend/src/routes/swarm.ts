@@ -26,7 +26,7 @@ interface SwarmExecutionResult {
 /**
  * Execute swarm decision cycle
  * POST /swarm/execute
- * 
+ *
  * Runs swarm analysis to generate a trading decision
  * (Full AI implementation requires DASHSCOPE_API_KEY)
  */
@@ -35,10 +35,7 @@ router.post('/execute', async (c: Context) => {
     const ctx = getWalletContext(c);
 
     if (!ctx?.walletAddress) {
-      return c.json(
-        errorEnvelope('Wallet address not found in request context'),
-        { status: 400 }
-      );
+      return c.json(errorEnvelope('Wallet address not found in request context'), { status: 400 });
     }
 
     // Get user by wallet address
@@ -50,10 +47,7 @@ router.post('/execute', async (c: Context) => {
 
     const userRecord = userList[0];
     if (!userRecord) {
-      return c.json(
-        errorEnvelope('User not found'),
-        { status: 404 }
-      );
+      return c.json(errorEnvelope('User not found'), { status: 404 });
     }
 
     const userId: string = userRecord.id;
@@ -102,8 +96,7 @@ router.post('/execute', async (c: Context) => {
 
     return c.json(successEnvelope(mockDecision));
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : 'Failed to execute swarm decision';
+    const message = error instanceof Error ? error.message : 'Failed to execute swarm decision';
     console.error('[POST /swarm/execute]', message, error);
 
     return c.json(errorEnvelope(message), { status: 500 });
@@ -119,10 +112,7 @@ router.get('/history', async (c: Context) => {
     const ctx = getWalletContext(c);
 
     if (!ctx?.walletAddress) {
-      return c.json(
-        errorEnvelope('Wallet address not found in request context'),
-        { status: 400 }
-      );
+      return c.json(errorEnvelope('Wallet address not found in request context'), { status: 400 });
     }
 
     // Get user by wallet address
@@ -134,10 +124,7 @@ router.get('/history', async (c: Context) => {
 
     const userRecord = userList[0];
     if (!userRecord) {
-      return c.json(
-        errorEnvelope('User not found'),
-        { status: 404 }
-      );
+      return c.json(errorEnvelope('User not found'), { status: 404 });
     }
 
     const userId: string = userRecord.id;
@@ -195,9 +182,8 @@ router.get('/history', async (c: Context) => {
       }
     }
 
-    const nextCursor = hasMore && items.length > 0
-      ? items[items.length - 1].timestamp?.toISOString() || null
-      : null;
+    const nextCursor =
+      hasMore && items.length > 0 ? items[items.length - 1].timestamp?.toISOString() || null : null;
 
     return c.json(
       successEnvelope({
@@ -211,8 +197,7 @@ router.get('/history', async (c: Context) => {
       })
     );
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : 'Failed to fetch swarm history';
+    const message = error instanceof Error ? error.message : 'Failed to fetch swarm history';
     console.error('[GET /swarm/history]', message, error);
 
     return c.json(errorEnvelope(message), { status: 500 });
