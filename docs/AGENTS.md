@@ -1,181 +1,104 @@
 # AGENTS.md
 
-This file provides guidelines for AI agents working on the Pacfi AI codebase.
-
-## Build Commands
+## Commands
 
 ```bash
-# Install dependencies
-pnpm install
-
-# Run all dev servers (parallel)
-pnpm dev
-
-# Build all packages
-pnpm build
-
-# Type-check all packages
-pnpm type-check
-
-# Format code with Prettier
-pnpm format
+pnpm install         # Install dependencies
+pnpm dev             # Run all dev servers (parallel)
+pnpm build           # Build all packages
+pnpm type-check      # Type-check all packages
+pnpm format          # Format with Prettier
+pnpm db:init         # Initialize database (apps/backend/scripts/init-db.mjs)
 ```
 
-### App-Specific Commands
+### Per-app commands
 
 ```bash
-# Frontend (Astro)
-cd apps/frontend && pnpm dev        # localhost:3000
-cd apps/frontend && pnpm build
-cd apps/frontend && pnpm type-check
-
-# Backend (Hono)
-cd apps/backend && pnpm dev         # localhost:3001
-cd apps/backend && pnpm build
+cd apps/frontend && pnpm dev   # localhost:3000 (Astro + React)
+cd apps/backend && pnpm dev    # localhost:3001 (Hono)
+cd apps/backend && pnpm db:push # Push Drizzle schema
 ```
 
-### Single Test Commands
+## Next Development
 
-No test framework is currently configured. When adding tests:
+See [NEXT_DEV.md](./NEXT_DEV.md) for:
 
-- Use Vitest for unit tests (preferred)
-- Run single test: `pnpm test -- src/component.test.ts`
-- Run tests in watch mode: `pnpm test:watch`
+- Deep integrations (TradingAgents, Pacifica API, AI models)
+- Feature enhancements (trading, analytics, agents)
+- UI/UX improvements per page
+- Priority roadmap and quick wins
 
-## Code Style Guidelines
+## Structure
 
-### TypeScript
+```
+apps/
+  ├── backend/       # Hono API, port 3001
+  └── frontend/     # Astro + React islands, port 3000
+packages/
+  ├── shared/       # @pacfi/shared
+  ├── ai-swarm/     # @pacfi/ai-swarm
+  └── database/     # @pacfi/database (Drizzle)
+```
 
-- Use strict TypeScript (`strict: true` in tsconfig)
+## Pacifica API Integration
+
+**Testnet**: `https://test-api.pacifica.fi/api/v1`
+**Mainnet**: `https://api.pacifica.fi/api/v1`
+
+### Available Endpoints (Tested)
+
+| Endpoint      | Path                         | Description                  |
+| ------------- | ---------------------------- | ---------------------------- |
+| Market Info   | `GET /info`                  | All trading pairs with specs |
+| Orderbook     | `GET /book?symbol=BTC`       | Real-time bid/ask            |
+| Trades        | `GET /trades?symbol=BTC`     | Recent trades                |
+| Create Order  | `POST /orders/create`        | Limit order                  |
+| Create Market | `POST /orders/create_market` | Market order                 |
+
+### API Agent Keys Setup
+
+Get from: https://app.pacifica.fi/apikey
+
+```bash
+# .env.local
+PACIFICA_AGENT_PRIVATE_KEY=<base58_private_key>
+PACIFICA_AGENT_ACCOUNT=<agent_wallet_address>
+```
+
+## Key conventions
+
+- **ESM**: All packages use `"type": "module"`
+- **Path aliases**: `@pacfi/*` for workspace packages
+- **Database**: Drizzle ORM with PostgreSQL (Neon/Supabase)
+- **Error handling**: Use `AppError` class in backend
+- **Imports order**: external → workspace → relative
+- **Styling**: Tailwind CSS; light mode only, no gradients, no emojis
+
+## TypeScript
+
+- Strict mode enabled
 - Prefer `interface` over `type` for object shapes
-- Use explicit return types on exported functions
-- Avoid `any` - use `unknown` with type guards instead
+- Avoid `any` - use `unknown` with type guards
+- Explicit return types on exported functions
 
-### Formatting (Prettier)
+## Tests
 
-```json
-{
-  "semi": true,
-  "trailingComma": "es5",
-  "singleQuote": true,
-  "printWidth": 100,
-  "tabWidth": 2,
-  "useTabs": false,
-  "arrowParens": "always"
-}
+No test framework configured. When adding tests:
+
+- Use Vitest
+- Run single: `pnpm test -- src/file.test.ts`
+- Run watch: `pnpm test:watch`
+
+## Env setup
+
+```bash
+cp .env.example .env.local
 ```
 
-### Naming Conventions
+Required vars:
 
-- Files: `kebab-case.ts` or `PascalCase.tsx` for components
-- Components: `PascalCase` (e.g., `Button.tsx`, `WalletConnect.tsx`)
-- Functions/variables: `camelCase`
-- Constants: `UPPER_SNAKE_CASE` for true constants
-- Interfaces/Types: `PascalCase` with descriptive names (e.g., `UserProfile`, `TradeData`)
-- Enums: `PascalCase` with `UPPER_SNAKE_CASE` values
-
-### Imports
-
-```typescript
-// 1. External libraries (sorted)
-import { Hono } from 'hono';
-import { cors } from 'hono/cors';
-
-// 2. Workspace packages
-import { SwarmCoordinator } from '@pacfi/ai-swarm';
-import type { User, Trade } from '@pacfi/shared';
-
-// 3. Relative imports
-import { db } from '../db';
-import { healthRouter } from './routes/health';
-```
-
-### Error Handling
-
-```typescript
-// Use AppError class for HTTP errors
-export class AppError extends Error {
-  constructor(
-    public statusCode: number,
-    public message: string,
-    public code?: string
-  ) {
-    super(message);
-    this.name = 'AppError';
-  }
-}
-
-// Log errors with context
-console.error('[Orders] Error creating order:', error);
-
-// Return safe error messages
-return c.json(
-  {
-    error: error instanceof Error ? error.message : 'Unknown error',
-  },
-  500
-);
-```
-
-### React Components
-
-```typescript
-interface ButtonProps {
-  children: React.ReactNode;
-  variant?: 'primary' | 'secondary' | 'danger' | 'success';
-  size?: 'sm' | 'md' | 'lg';
-  onClick?: () => void;
-}
-
-export default function Button({
-  children,
-  variant = 'primary',
-  size = 'md',
-  onClick,
-}: ButtonProps) {
-  // Component logic
-}
-```
-
-### Astro Pages
-
-```astro
----
-import Layout from '../layouts/Layout.astro';
-import DashboardContent from '../components/DashboardContent';
----
-
-<Layout title="Page Title">
-  <DashboardContent client:load />
-</Layout>
-```
-
-## Project Structure
-
-```
-pacfi-ai/
-├── apps/
-│   ├── backend/          # Hono API (port 3001)
-│   └── frontend/         # Astro + React (port 3000)
-├── packages/
-│   ├── shared/           # Types & utilities (@pacfi/shared)
-│   ├── ai-swarm/         # AI coordination (@pacfi/ai-swarm)
-│   └── database/         # Drizzle schema (@pacfi/database)
-```
-
-## Key Conventions
-
-1. **ES Modules**: All packages use `"type": "module"`
-2. **Path Aliases**: Use `@pacfi/*` for workspace packages
-3. **Database**: Use Drizzle ORM with PostgreSQL
-4. **API**: Use Hono with proper error handling middleware
-5. **Styling**: Tailwind CSS with inline styles for landing pages
-6. **Icons**: Inline SVG icons (no icon libraries)
-7. **Theme**: Light mode only, no gradients, no emojis
-
-## Performance Targets
-
-- LCP: < 2.5s
-- FID: < 100ms
-- CLS: < 0.1
-- Total Load Time: < 3s
+- `DATABASE_URL` - PostgreSQL connection
+- `PACIFICA_AGENT_PRIVATE_KEY` - Agent wallet private key (base58)
+- `PACIFICA_AGENT_ACCOUNT` - Agent wallet address
+- `DASHSCOPE_API_KEY` - Qwen AI API key
+- `VITE_API_URL` - Frontend API URL (default: http://localhost:3001)

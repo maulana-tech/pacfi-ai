@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import SwarmVisualization from './SwarmVisualization';
-import SwarmSkeleton from './SwarmSkeleton';
 import { useWalletContext } from './WalletConnect';
 
 interface PacificaMarketData {
@@ -51,8 +50,6 @@ interface ApiEnvelope<T> {
   error: string | null;
 }
 
-const API_URL = import.meta.env.PUBLIC_API_URL ?? 'http://localhost:3001';
-
 interface Agent {
   id: string;
   name: string;
@@ -63,6 +60,8 @@ interface Agent {
   reasoning?: string;
   color: string;
 }
+
+const API_URL = import.meta.env.PUBLIC_API_URL ?? 'http://localhost:3001';
 
 const INITIAL_AGENTS: Agent[] = [
   {
@@ -168,7 +167,7 @@ export default function SwarmContent() {
   const [cycleIndex, setCycleIndex] = useState(0);
   const [lastRun, setLastRun] = useState<string | null>(null);
   const [marketData, setMarketData] = useState<PacificaMarketData[]>([]);
-  
+
   const [swarmHistory, setSwarmHistory] = useState<SwarmHistoryData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -211,7 +210,7 @@ export default function SwarmContent() {
   }, [isConnected, walletAddress]);
 
   useEffect(() => {
-    const fetchMarketData = async () => {
+    const fetchMarketDataFn = async () => {
       try {
         const res = await fetch('https://test-api.pacifica.fi/api/v1/info/prices');
         const json = (await res.json()) as { success: boolean; data: PacificaMarketData[] };
@@ -222,8 +221,8 @@ export default function SwarmContent() {
         console.error('[SwarmContent] Failed to fetch market data:', err);
       }
     };
-    fetchMarketData();
-    const interval = setInterval(fetchMarketData, 30000);
+    fetchMarketDataFn();
+    const interval = setInterval(fetchMarketDataFn, 30000);
     return () => clearInterval(interval);
   }, []);
 
@@ -285,9 +284,21 @@ export default function SwarmContent() {
     swarmHistory && !loading && !error
       ? [
           { label: 'Total Cycles', value: String(swarmHistory.stats.totalCycles), sub: 'All time' },
-          { label: 'Avg. Confidence', value: `${swarmHistory.stats.avgConfidence.toFixed(1)}%`, sub: 'Last 30 days' },
-          { label: 'Swarm Win Rate', value: `${swarmHistory.stats.winRate.toFixed(1)}%`, sub: 'Based on decisions' },
-          { label: 'Active Agents', value: `${swarmHistory.stats.activeAgents}/4`, sub: 'All online' },
+          {
+            label: 'Avg. Confidence',
+            value: `${swarmHistory.stats.avgConfidence.toFixed(1)}%`,
+            sub: 'Last 30 days',
+          },
+          {
+            label: 'Swarm Win Rate',
+            value: `${swarmHistory.stats.winRate.toFixed(1)}%`,
+            sub: 'Based on decisions',
+          },
+          {
+            label: 'Active Agents',
+            value: `${swarmHistory.stats.activeAgents}/4`,
+            sub: 'All online',
+          },
         ]
       : [
           { label: 'Total Cycles', value: '-', sub: 'All time' },
@@ -409,33 +420,77 @@ export default function SwarmContent() {
           </div>
           <div style={{ padding: '16px 20px' }}>
             {!isConnected ? (
-              <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#9CA3AF' }}>
+              <div
+                style={{
+                  height: 200,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#9CA3AF',
+                }}
+              >
                 Connect wallet to view agent history
               </div>
             ) : loading ? (
               <div className="skeleton" style={{ height: 200, borderRadius: 10 }} />
             ) : error ? (
-              <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#EF4444' }}>
+              <div
+                style={{
+                  height: 200,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#EF4444',
+                }}
+              >
                 {error}
               </div>
             ) : swarmHistory && swarmHistory.agentHistory.length > 0 ? (
               <ResponsiveContainer width="100%" height={200}>
                 <BarChart data={swarmHistory.agentHistory}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" vertical={false} />
-                  <XAxis dataKey="cycle" tick={{ fontSize: 10, fill: '#9CA3AF' }} tickLine={false} axisLine={false} />
-                  <YAxis tick={{ fontSize: 10, fill: '#9CA3AF' }} tickLine={false} axisLine={false} domain={[0, 100]} />
+                  <XAxis
+                    dataKey="cycle"
+                    tick={{ fontSize: 10, fill: '#9CA3AF' }}
+                    tickLine={false}
+                    axisLine={false}
+                  />
+                  <YAxis
+                    tick={{ fontSize: 10, fill: '#9CA3AF' }}
+                    tickLine={false}
+                    axisLine={false}
+                    domain={[0, 100]}
+                  />
                   <Tooltip
                     formatter={(v: number) => `${v}%`}
-                    contentStyle={{ background: '#FFF', border: '1px solid #E5E7EB', borderRadius: 6, fontSize: 11 }}
+                    contentStyle={{
+                      background: '#FFF',
+                      border: '1px solid #E5E7EB',
+                      borderRadius: 6,
+                      fontSize: 11,
+                    }}
                   />
                   <Bar dataKey="market_analyst" stackId="a" fill="#2563EB" name="Market Analyst" />
-                  <Bar dataKey="sentiment_agent" stackId="a" fill="#7C3AED" name="Sentiment Agent" />
+                  <Bar
+                    dataKey="sentiment_agent"
+                    stackId="a"
+                    fill="#7C3AED"
+                    name="Sentiment Agent"
+                  />
                   <Bar dataKey="risk_manager" stackId="a" fill="#0891B2" name="Risk Manager" />
                   <Bar dataKey="coordinator" stackId="a" fill="#059669" name="Coordinator" />
                 </BarChart>
               </ResponsiveContainer>
             ) : (
-              <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#9CA3AF' }}>
+              <div
+                style={{
+                  height: 200,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#9CA3AF',
+                }}
+              >
                 No agent history yet
               </div>
             )}
@@ -460,19 +515,28 @@ export default function SwarmContent() {
             <tbody>
               {!isConnected ? (
                 <tr>
-                  <td colSpan={6} style={{ textAlign: 'center', padding: '20px', color: '#9CA3AF' }}>
+                  <td
+                    colSpan={6}
+                    style={{ textAlign: 'center', padding: '20px', color: '#9CA3AF' }}
+                  >
                     Connect wallet to view decisions
                   </td>
                 </tr>
               ) : loading ? (
                 <tr>
-                  <td colSpan={6} style={{ textAlign: 'center', padding: '20px', color: '#9CA3AF' }}>
+                  <td
+                    colSpan={6}
+                    style={{ textAlign: 'center', padding: '20px', color: '#9CA3AF' }}
+                  >
                     Loading...
                   </td>
                 </tr>
               ) : error ? (
                 <tr>
-                  <td colSpan={6} style={{ textAlign: 'center', padding: '20px', color: '#EF4444' }}>
+                  <td
+                    colSpan={6}
+                    style={{ textAlign: 'center', padding: '20px', color: '#EF4444' }}
+                  >
                     {error}
                   </td>
                 </tr>
@@ -534,7 +598,10 @@ export default function SwarmContent() {
                 ))
               ) : (
                 <tr>
-                  <td colSpan={6} style={{ textAlign: 'center', padding: '20px', color: '#9CA3AF' }}>
+                  <td
+                    colSpan={6}
+                    style={{ textAlign: 'center', padding: '20px', color: '#9CA3AF' }}
+                  >
                     No decisions yet
                   </td>
                 </tr>

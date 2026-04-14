@@ -6,7 +6,7 @@ import postgres from 'postgres';
 import * as schema from './schema';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-config({ path: path.resolve(__dirname, '../../../../.env') });
+config({ path: path.resolve(__dirname, '../../../../.env.local') });
 
 const connectionString = process.env.DATABASE_URL;
 

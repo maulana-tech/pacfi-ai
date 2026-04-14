@@ -20,8 +20,10 @@ export const getWalletAddress = (c: any): string | null => {
  * Solana addresses are base58 encoded, 32-44 characters
  */
 export const isValidWalletAddress = (address: string): boolean => {
-  // Basic Solana address validation
-  return /^[1-9A-HJ-NP-Z]{32,44}$/.test(address);
+  // Allow any reasonably long base58-like string (for Pacifica compatibility)
+  // Pacifica may use different address formats
+  if (!address || address.length < 20) return false;
+  return /^[1-9A-Za-z]+$/.test(address);
 };
 
 /**

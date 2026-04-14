@@ -1,6 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import bs58 from 'bs58';
 
+const isValidSolanaAddress = (address: string): boolean => {
+  if (!address || address.length < 32) return false;
+  return /^[1-9A-HJ-NP-Za-km-z]+$/.test(address);
+};
+
 interface WalletContextType {
   walletAddress: string | null;
   isConnected: boolean;
@@ -58,8 +63,19 @@ export const useWalletContext = (): WalletContextType => {
       return;
     }
 
-    const currentAddress = resolved.provider?.publicKey?.toBase58?.() ?? null;
+    const rawAddress = resolved.provider?.publicKey?.toBase58?.() ?? null;
+
+    const currentAddress = rawAddress && isValidSolanaAddress(rawAddress) ? rawAddress : null;
     const connected = Boolean(resolved.provider?.isConnected && currentAddress);
+
+    console.log(
+      '[Wallet] Sync state - raw:',
+      rawAddress,
+      'valid:',
+      currentAddress,
+      'connected:',
+      connected
+    );
 
     setWalletAddress(currentAddress);
     setIsConnected(connected);
@@ -103,11 +119,18 @@ export const useWalletContext = (): WalletContextType => {
       const connection = await resolved.provider.connect();
       localStorage.setItem('pacfi_wallet_provider', resolved.key);
 
-      const nextAddress =
+      const rawAddress =
         connection?.publicKey?.toBase58?.() ?? resolved.provider?.publicKey?.toBase58?.() ?? null;
 
+      const nextAddress = rawAddress && isValidSolanaAddress(rawAddress) ? rawAddress : null;
+
+      if (!nextAddress) {
+        throw new Error('Invalid wallet address received');
+      }
+
+      console.log('[Wallet] Connected with address:', nextAddress);
       setWalletAddress(nextAddress);
-      setIsConnected(Boolean(nextAddress));
+      setIsConnected(true);
       emitWalletChanged();
 
       return nextAddress;
@@ -166,6 +189,18 @@ export default function WalletConnect({ onConnect, onDisconnect }: WalletConnect
   const { walletAddress, isConnected, disconnect, connect, isConnecting } = useWalletContext();
   const [mounted, setMounted] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (mounted && isConnected && walletAddress && !isValidSolanaAddress(walletAddress)) {
+      console.warn('[Wallet] Invalid address detected, disconnecting');
+      setError('Invalid wallet address detected');
+      disconnect();
+    }
+  }, [mounted, isConnected, walletAddress, disconnect]);
 
   useEffect(() => {
     setMounted(true);

@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - '3001:3001'
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - DATABASE_URL=${DATABASE_URL}
+      - PACIFICA_AGENT_PRIVATE_KEY=${PACIFICA_AGENT_PRIVATE_KEY}
+      - PACIFICA_AGENT_ACCOUNT=${PACIFICA_AGENT_ACCOUNT}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
+      - JWT_SECRET=${JWT_SECRET}
+      - VITE_API_URL=http://localhost:3001
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:3001/health']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./apps/frontend
+      dockerfile: ../Dockerfile.frontend
+    ports:
+      - '3000:3000'
+    environment:
+      - VITE_API_URL=http://backend:3001
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+networks:
+  default:
+    name: pacfi-network
