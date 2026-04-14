@@ -131,10 +131,10 @@ export async function fetchAgentStatus(): Promise<AgentStatus> {
 // Market data types and fetching
 export type MarketData = {
   price: number;
-  change: number;      // 24h change percentage
-  high: number;        // 24h high
-  low: number;         // 24h low
-  volume: string;      // Volume display string
+  change: number; // 24h change percentage
+  high: number; // 24h high
+  low: number; // 24h low
+  volume: string; // Volume display string
   fundingRate: string; // Funding rate display string
 };
 
@@ -191,13 +191,13 @@ export async function fetchPacificaMarketData(
   try {
     // Fetch from backend endpoint that aggregates Pacifica market data
     const response = await fetch(`${API_BASE}/orders/market-data?symbols=${symbols.join(',')}`);
-    
+
     if (!response.ok) {
       throw new Error('Market data API failed');
     }
 
     const payload = await response.json();
-    
+
     if (payload.success === false || !payload.data) {
       throw new Error('Invalid market data response');
     }
@@ -213,7 +213,7 @@ export async function fetchPacificaMarketData(
     return marketData;
   } catch (error) {
     console.warn('Failed to fetch real-time market data from Pacifica, using fallback:', error);
-    
+
     // Return cached data if available, otherwise fallback to mock
     if (marketDataCache) {
       return marketDataCache.data;
