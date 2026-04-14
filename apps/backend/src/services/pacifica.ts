@@ -1,5 +1,20 @@
 import { MarketData } from '../types';
 
+export interface PacificaLeaderboardEntry {
+  address: string;
+  username: string | null;
+  pnl_1d: string;
+  pnl_7d: string;
+  pnl_30d: string;
+  pnl_all_time: string;
+  equity_current: string;
+  oi_current: string;
+  volume_1d: string;
+  volume_7d: string;
+  volume_30d: string;
+  volume_all_time: string;
+}
+
 /**
  * Pacifica API Client
  * Handles order creation and market data fetching
@@ -353,6 +368,20 @@ export class PacificaClient {
         builder_code: builderCode,
       }),
     });
+  }
+
+  /**
+   * Get global leaderboard from Pacifica
+   * Endpoint: GET /api/v1/leaderboard
+   */
+  async getLeaderboard(): Promise<PacificaLeaderboardEntry[]> {
+    try {
+      const data = await this.request<PacificaLeaderboardEntry[]>('/leaderboard');
+      return Array.isArray(data) ? data : [];
+    } catch (error) {
+      console.error('[PacificaClient] Error fetching leaderboard:', error);
+      throw error;
+    }
   }
 
   async updateBuilderFeeRate(
