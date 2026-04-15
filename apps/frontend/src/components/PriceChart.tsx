@@ -1,33 +1,54 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-} from 'recharts';
+  createChart,
+  AreaSeries as AreaSeriesDef,
+  ColorType,
+  CrosshairMode,
+  type AreaData,
+  type IChartApi,
+  type ISeriesApi,
+  type Time,
+} from 'lightweight-charts';
 
-// Generate mock OHLCV data
-function generateMockData(points = 60) {
-  const data = [];
-  let price = 45000 + Math.random() * 5000;
-  const now = Date.now();
+const API_BASE =
+  (import.meta.env.PUBLIC_API_URL as string | undefined)?.replace(/\/$/, '') ||
+  'http://localhost:3001';
 
-  for (let i = points; i >= 0; i--) {
-    const change = (Math.random() - 0.48) * 800;
-    price = Math.max(30000, price + change);
-    const ts = new Date(now - i * 15 * 60 * 1000);
-    data.push({
-      time: ts.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
-      price: parseFloat(price.toFixed(2)),
-    });
-  }
-  return data;
+const PERIODS = [
+  { label: '5m', interval: '1m', limit: 80 },
+  { label: '1H', interval: '1m', limit: 120 },
+  { label: '4H', interval: '5m', limit: 90 },
+  { label: '1D', interval: '15m', limit: 96 },
+  { label: '1W', interval: '1h', limit: 168 },
+  { label: '1M', interval: '4h', limit: 180 },
+] as const;
+
+const COIN_BG: Record<string, string> = {
+  BTC: '#F7931A',
+  ETH: '#627EEA',
+  SOL: '#14F195',
+  AVAX: '#E84142',
+  LINK: '#2A5ADA',
+  XRP: '#00AAE4',
+  DOGE: '#C2A633',
+  WLD: '#2D2D2D',
+};
+
+const COIN_SYMBOL: Record<string, string> = {
+  BTC: 'B',
+  ETH: 'E',
+  SOL: 'S',
+  AVAX: 'A',
+  LINK: 'L',
+  XRP: 'X',
+  DOGE: 'D',
+  WLD: 'W',
+};
+
+interface CandlePoint {
+  time: number;
+  close: number;
 }
-
-const PERIODS = ['1H', '4H', '1D', '1W', '1M'];
 
 interface PriceChartProps {
   symbol?: string;
@@ -35,164 +56,358 @@ interface PriceChartProps {
   change24h?: number;
 }
 
-const CustomTooltip = ({ active, payload, label }: any) => {
-  if (active && payload && payload.length) {
-    return (
-      <div
-        style={{
-          background: '#FFFFFF',
-          border: '1px solid #E5E7EB',
-          borderRadius: 6,
-          padding: '8px 12px',
-          boxShadow: '0 4px 8px rgba(0,0,0,0.08)',
-        }}
-      >
-        <p style={{ fontSize: 11, color: '#9CA3AF', marginBottom: 2 }}>{label}</p>
-        <p
-          style={{
-            fontSize: 14,
-            fontWeight: 700,
-            color: '#111827',
-            fontFamily: 'monospace',
-          }}
-        >
-          ${payload[0].value.toLocaleString('en-US', { minimumFractionDigits: 2 })}
-        </p>
-      </div>
-    );
+function formatPrice(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) {
+    return '0.00';
   }
-  return null;
-};
+  return value.toLocaleString('en-US', {
+    minimumFractionDigits: value >= 1000 ? 2 : 3,
+    maximumFractionDigits: value >= 1000 ? 2 : 4,
+  });
+}
 
-export default function PriceChart({ symbol = 'BTC/USD', currentPrice = 45230.5, change24h = 2.34 }: PriceChartProps) {
-  const [activePeriod, setActivePeriod] = useState('1H');
-  const data = generateMockData(60);
+export default function PriceChart({
+  symbol = 'BTC',
+  currentPrice = 0,
+  change24h = 0,
+}: PriceChartProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const areaRef = useRef<ISeriesApi<'Area'> | null>(null);
+
+  const [activePeriod, setActivePeriod] = useState(1);
+  const [loading, setLoading] = useState(true);
+  const [crossPrice, setCrossPrice] = useState<number | null>(null);
+  const [crossTime, setCrossTime] = useState<number | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+
   const isPositive = change24h >= 0;
-  const strokeColor = isPositive ? '#10B981' : '#EF4444';
-  const fillColor = isPositive ? 'rgba(16,185,129,0.06)' : 'rgba(239,68,68,0.06)';
+  const trendColor = isPositive ? '#10B981' : '#EF4444';
+  const coinColor = COIN_BG[symbol] ?? '#64748B';
+  const coinChar = COIN_SYMBOL[symbol] ?? symbol[0] ?? '?';
+
+  useEffect(() => {
+    if (!containerRef.current) {
+      return;
+    }
+
+    const chart = createChart(containerRef.current, {
+      width: containerRef.current.clientWidth,
+      height: 300,
+      layout: {
+        background: { type: ColorType.Solid, color: '#FFFFFF' },
+        textColor: '#64748B',
+        fontSize: 11,
+      },
+      grid: {
+        vertLines: { color: 'rgba(203, 213, 225, 0.45)' },
+        horzLines: { color: 'rgba(203, 213, 225, 0.45)' },
+      },
+      crosshair: {
+        mode: CrosshairMode.Normal,
+        vertLine: {
+          color: 'rgba(100, 116, 139, 0.45)',
+          width: 1,
+          labelBackgroundColor: '#0F172A',
+        },
+        horzLine: {
+          color: 'rgba(100, 116, 139, 0.45)',
+          width: 1,
+          labelBackgroundColor: '#0F172A',
+        },
+      },
+      rightPriceScale: {
+        borderColor: '#E2E8F0',
+        entireTextOnly: true,
+      },
+      timeScale: {
+        borderColor: '#E2E8F0',
+        timeVisible: true,
+        secondsVisible: false,
+        rightOffset: 4,
+        barSpacing: 9,
+      },
+    });
+
+    const areaSeries = chart.addSeries(AreaSeriesDef, {
+      lineWidth: 2,
+      lineColor: trendColor,
+      topColor: isPositive ? 'rgba(16, 185, 129, 0.40)' : 'rgba(239, 68, 68, 0.40)',
+      bottomColor: isPositive ? 'rgba(16, 185, 129, 0.03)' : 'rgba(239, 68, 68, 0.03)',
+      priceLineColor: trendColor,
+      priceLineVisible: true,
+      lastValueVisible: true,
+      crosshairMarkerRadius: 5,
+      crosshairMarkerBorderColor: '#E2E8F0',
+      crosshairMarkerBackgroundColor: trendColor,
+    }) as ISeriesApi<'Area'>;
+
+    chart.subscribeCrosshairMove((param) => {
+      const data = param.seriesData.get(areaSeries) as AreaData<Time> | undefined;
+      setCrossPrice(data?.value ?? null);
+      if (typeof param.time === 'number') {
+        setCrossTime(param.time);
+      } else {
+        setCrossTime(null);
+      }
+    });
+
+    const resizeObserver = new ResizeObserver(() => {
+      if (containerRef.current) {
+        chart.applyOptions({ width: containerRef.current.clientWidth });
+      }
+    });
+
+    resizeObserver.observe(containerRef.current);
+
+    chartRef.current = chart;
+    areaRef.current = areaSeries;
+
+    return () => {
+      resizeObserver.disconnect();
+      chart.remove();
+      chartRef.current = null;
+      areaRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!areaRef.current) {
+      return;
+    }
+    areaRef.current.applyOptions({
+      lineColor: trendColor,
+      topColor: isPositive ? 'rgba(16, 185, 129, 0.40)' : 'rgba(239, 68, 68, 0.40)',
+      bottomColor: isPositive ? 'rgba(16, 185, 129, 0.03)' : 'rgba(239, 68, 68, 0.03)',
+      priceLineColor: trendColor,
+      crosshairMarkerBackgroundColor: trendColor,
+    });
+  }, [isPositive, trendColor]);
+
+  const setFallbackSeries = useCallback(() => {
+    if (!areaRef.current || currentPrice <= 0) {
+      return;
+    }
+    const now = Math.floor(Date.now() / 1000);
+    const flatData: AreaData<Time>[] = [
+      { time: (now - 3600) as Time, value: currentPrice },
+      { time: now as Time, value: currentPrice },
+    ];
+    areaRef.current.setData(flatData);
+    chartRef.current?.timeScale().fitContent();
+  }, [currentPrice]);
+
+  const fetchLineData = useCallback(async () => {
+    setLoading(true);
+    const { interval, limit } = PERIODS[activePeriod];
+    try {
+      const response = await fetch(
+        `${API_BASE}/orders/candles?symbol=${symbol}&interval=${interval}&limit=${limit}`
+      );
+      if (!response.ok) {
+        throw new Error('Failed to fetch candles');
+      }
+
+      const payload = await response.json();
+      const candles: CandlePoint[] = Array.isArray(payload.data) ? payload.data : [];
+      const lineData: AreaData<Time>[] = candles
+        .filter((item) => Number.isFinite(item.time) && Number.isFinite(item.close))
+        .map((item) => ({
+          time: item.time as Time,
+          value: item.close,
+        }));
+
+      if (lineData.length >= 2 && areaRef.current) {
+        areaRef.current.setData(lineData);
+        chartRef.current?.timeScale().fitContent();
+        setLastUpdated(new Date());
+      } else {
+        setFallbackSeries();
+      }
+    } catch {
+      setFallbackSeries();
+    } finally {
+      setLoading(false);
+    }
+  }, [activePeriod, setFallbackSeries, symbol]);
+
+  useEffect(() => {
+    fetchLineData();
+    const timer = setInterval(fetchLineData, 12000);
+    return () => clearInterval(timer);
+  }, [fetchLineData]);
+
+  const displayPrice = crossPrice ?? currentPrice;
+  const crossTimeLabel =
+    typeof crossTime === 'number'
+      ? new Date(crossTime * 1000).toLocaleString('en-US', {
+          month: 'short',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+        })
+      : '--';
 
   return (
-    <div className="card" style={{ padding: '20px 20px 16px' }}>
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 20 }}>
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+    <div
+      className="card"
+      style={{
+        padding: 0,
+        border: '1px solid #DBE4F0',
+        borderRadius: 18,
+        background: '#FFFFFF',
+        overflow: 'hidden',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '14px 16px 10px',
+          borderBottom: '1px solid #E2E8F0',
+          gap: 12,
+          flexWrap: 'wrap',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span
+            style={{
+              width: 30,
+              height: 30,
+              borderRadius: '50%',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 12,
+              fontWeight: 800,
+              color: '#FFFFFF',
+              background: coinColor,
+            }}
+          >
+            {coinChar}
+          </span>
+          <div>
+            <div
+              style={{ fontSize: 11, color: '#64748B', fontWeight: 700, letterSpacing: '0.05em' }}
+            >
+              {symbol}/USDC
+            </div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+              <span className="num" style={{ color: '#0F172A', fontWeight: 800, fontSize: 20 }}>
+                ${formatPrice(displayPrice)}
+              </span>
+              <span
+                style={{
+                  fontSize: 12,
+                  fontWeight: 700,
+                  color: isPositive ? '#34D399' : '#F87171',
+                }}
+              >
+                {isPositive ? '+' : ''}
+                {change24h.toFixed(2)}%
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto' }}>
+          {lastUpdated && (
+            <span style={{ fontSize: 11, color: '#64748B' }}>
+              Updated {lastUpdated.toLocaleTimeString('en-US', { hour12: false })} UTC+7
+            </span>
+          )}
+          <div
+            style={{
+              display: 'flex',
+              gap: 4,
+              padding: 3,
+              borderRadius: 7,
+              background: '#F8FAFC',
+              border: '1px solid #E2E8F0',
+            }}
+          >
+            {PERIODS.map((period, idx) => (
+              <button
+                key={period.label}
+                onClick={() => setActivePeriod(idx)}
+                style={{
+                  border: 'none',
+                  borderRadius: 5,
+                  padding: '5px 8px',
+                  cursor: 'pointer',
+                  fontSize: 11,
+                  fontWeight: 700,
+                  color: activePeriod === idx ? '#FFFFFF' : '#64748B',
+                  background: activePeriod === idx ? '#2563EB' : 'transparent',
+                }}
+              >
+                {period.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '8px 16px',
+          background: '#F8FAFC',
+          borderBottom: '1px solid #E2E8F0',
+          fontSize: 11,
+          color: '#64748B',
+        }}
+      >
+        <span>
+          Cursor Price{' '}
+          <strong style={{ color: '#0F172A', fontWeight: 700 }}>
+            ${formatPrice(displayPrice)}
+          </strong>
+        </span>
+        <span>
+          Cursor Time{' '}
+          <strong style={{ color: '#0F172A', fontWeight: 700 }}>{crossTimeLabel}</strong>
+        </span>
+      </div>
+
+      <div style={{ position: 'relative' }}>
+        {loading && (
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              zIndex: 5,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: 'rgba(255, 255, 255, 0.78)',
+              pointerEvents: 'none',
+            }}
+          >
             <div
               style={{
-                width: 28,
-                height: 28,
-                background: '#F7931A',
-                borderRadius: 50,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
+                width: 24,
+                height: 24,
+                borderRadius: '50%',
+                border: '2px solid rgba(148, 163, 184, 0.24)',
+                borderTopColor: '#2563EB',
+                animation: 'priceSpin 0.8s linear infinite',
               }}
-            >
-              <span style={{ fontSize: 12, fontWeight: 800, color: '#FFF' }}>₿</span>
-            </div>
-            <span style={{ fontSize: 15, fontWeight: 700, color: '#111827' }}>{symbol}</span>
-            <span
-              className="badge"
-              style={{
-                background: '#F3F4F6',
-                color: '#6B7280',
-                fontSize: 10,
-                padding: '2px 6px',
-              }}
-            >
-              PERP
-            </span>
+            />
           </div>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-            <span
-              className="num"
-              style={{ fontSize: 26, fontWeight: 800, color: '#111827', letterSpacing: '-0.5px' }}
-            >
-              ${currentPrice.toLocaleString('en-US', { minimumFractionDigits: 2 })}
-            </span>
-            <span
-              style={{
-                fontSize: 13,
-                fontWeight: 600,
-                color: isPositive ? '#10B981' : '#EF4444',
-              }}
-            >
-              {isPositive ? '+' : ''}{change24h}%
-            </span>
-          </div>
-        </div>
-
-        {/* Period selector */}
-        <div
-          style={{
-            display: 'flex',
-            gap: 2,
-            background: '#F3F4F6',
-            borderRadius: 6,
-            padding: 3,
-          }}
-        >
-          {PERIODS.map((p) => (
-            <button
-              key={p}
-              onClick={() => setActivePeriod(p)}
-              style={{
-                padding: '4px 10px',
-                borderRadius: 4,
-                fontSize: 11,
-                fontWeight: 600,
-                border: 'none',
-                cursor: 'pointer',
-                background: activePeriod === p ? '#FFFFFF' : 'transparent',
-                color: activePeriod === p ? '#111827' : '#9CA3AF',
-                boxShadow: activePeriod === p ? '0 1px 2px rgba(0,0,0,0.08)' : 'none',
-                transition: 'all 0.15s',
-              }}
-            >
-              {p}
-            </button>
-          ))}
-        </div>
+        )}
+        <div ref={containerRef} style={{ width: '100%', minHeight: 300 }} />
       </div>
 
-      {/* Chart */}
-      <div style={{ height: 200 }}>
-        <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={data} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
-            <defs>
-              <linearGradient id="priceGradient" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor={strokeColor} stopOpacity={0.12} />
-                <stop offset="95%" stopColor={strokeColor} stopOpacity={0} />
-              </linearGradient>
-            </defs>
-            <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" vertical={false} />
-            <XAxis
-              dataKey="time"
-              tick={{ fontSize: 10, fill: '#9CA3AF' }}
-              tickLine={false}
-              axisLine={false}
-              interval={11}
-            />
-            <YAxis
-              tick={{ fontSize: 10, fill: '#9CA3AF' }}
-              tickLine={false}
-              axisLine={false}
-              tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`}
-              domain={['auto', 'auto']}
-            />
-            <Tooltip content={<CustomTooltip />} cursor={{ stroke: '#E5E7EB', strokeWidth: 1 }} />
-            <Area
-              type="monotone"
-              dataKey="price"
-              stroke={strokeColor}
-              strokeWidth={1.5}
-              fill="url(#priceGradient)"
-              dot={false}
-              activeDot={{ r: 4, fill: strokeColor, strokeWidth: 0 }}
-            />
-          </AreaChart>
-        </ResponsiveContainer>
-      </div>
+      <style>{`
+        @keyframes priceSpin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+      `}</style>
     </div>
   );
 }

@@ -1,9 +1,9 @@
 import { Hono } from 'hono';
 import { asc, desc, eq } from 'drizzle-orm';
 import { getWalletContext } from '../middleware/auth';
-import { PacificaClient } from '../services/pacifica';
+import { PacificaClient, PacificaLeaderboardEntry } from '../services/pacifica';
 import { db } from '../db';
-import { aiLogs, leaderboard, trades, users } from '../db/schema';
+import { aiLogs, trades, users } from '../db/schema';
 import { errorEnvelope, successEnvelope } from '../lib/api';
 
 const dbAvailable = typeof db !== 'undefined' && db !== null;
@@ -55,159 +55,14 @@ const toIso = (value: Date | string | null | undefined): string => {
   return new Date(value).toISOString();
 };
 
-type ComputedLeaderboardRow = {
-  walletAddress: string;
-  username: string | null;
-  totalROI: number;
-  winRate: number;
-  sharpeRatio: number;
-  totalTrades: number;
-  updatedAt: string;
-};
-
-type LeaderboardSortBy = 'roi' | 'winrate' | 'trades' | 'sharpe';
-type LeaderboardOrder = 'asc' | 'desc';
-type LeaderboardPeriod = 'all' | '7d' | '30d';
-
 const computeSharpe = (returns: number[]): number => {
-  if (returns.length === 0) {
-    return 0;
-  }
-  const mean = returns.reduce((acc, value) => acc + value, 0) / returns.length;
-  const variance =
-    returns.reduce((acc, value) => acc + (value - mean) * (value - mean), 0) / returns.length;
+  if (returns.length === 0) return 0;
+  const mean = returns.reduce((acc, v) => acc + v, 0) / returns.length;
+  const variance = returns.reduce((acc, v) => acc + (v - mean) * (v - mean), 0) / returns.length;
   const stdDev = Math.sqrt(variance);
-  if (stdDev === 0) {
-    return mean;
-  }
+  if (stdDev === 0) return mean;
   return (mean / stdDev) * Math.sqrt(returns.length);
 };
-
-async function buildComputedLeaderboard(): Promise<ComputedLeaderboardRow[]> {
-  return buildComputedLeaderboardWithPeriod('all');
-}
-
-function getPeriodStartMs(period: LeaderboardPeriod): number | null {
-  const now = Date.now();
-  if (period === '7d') {
-    return now - 7 * 24 * 60 * 60 * 1000;
-  }
-  if (period === '30d') {
-    return now - 30 * 24 * 60 * 60 * 1000;
-  }
-  return null;
-}
-
-async function buildComputedLeaderboardWithPeriod(
-  period: LeaderboardPeriod
-): Promise<ComputedLeaderboardRow[]> {
-  const rows = await db
-    .select({
-      walletAddress: users.walletAddress,
-      username: users.username,
-      status: trades.status,
-      roi: trades.roi,
-      pnl: trades.pnl,
-      executedAt: trades.executedAt,
-    })
-    .from(trades)
-    .innerJoin(users, eq(trades.userId, users.id));
-
-  const byWallet = new Map<
-    string,
-    {
-      walletAddress: string;
-      username: string | null;
-      totalTrades: number;
-      closedTrades: number;
-      wins: number;
-      roiValues: number[];
-      totalROI: number;
-      latestTimestamp: number;
-    }
-  >();
-
-  for (const row of rows) {
-    const executedTime = row.executedAt ? new Date(row.executedAt).getTime() : 0;
-    const periodStartMs = getPeriodStartMs(period);
-    if (periodStartMs !== null && executedTime > 0 && executedTime < periodStartMs) {
-      continue;
-    }
-
-    const key = row.walletAddress;
-    if (!byWallet.has(key)) {
-      byWallet.set(key, {
-        walletAddress: row.walletAddress,
-        username: row.username ?? null,
-        totalTrades: 0,
-        closedTrades: 0,
-        wins: 0,
-        roiValues: [],
-        totalROI: 0,
-        latestTimestamp: 0,
-      });
-    }
-
-    const bucket = byWallet.get(key)!;
-    bucket.totalTrades += 1;
-    bucket.latestTimestamp = Math.max(bucket.latestTimestamp, executedTime);
-
-    if (row.status === 'CLOSED') {
-      bucket.closedTrades += 1;
-      const roi = parseNumber(row.roi, 0);
-      bucket.roiValues.push(roi);
-      bucket.totalROI += roi;
-      if (parseNumber(row.pnl, 0) > 0) {
-        bucket.wins += 1;
-      }
-    }
-  }
-
-  return Array.from(byWallet.values())
-    .filter((row) => row.totalTrades > 0)
-    .map((row) => ({
-      walletAddress: row.walletAddress,
-      username: row.username,
-      totalROI: row.totalROI,
-      winRate: row.closedTrades > 0 ? (row.wins / row.closedTrades) * 100 : 0,
-      sharpeRatio: computeSharpe(row.roiValues),
-      totalTrades: row.totalTrades,
-      updatedAt: row.latestTimestamp
-        ? new Date(row.latestTimestamp).toISOString()
-        : new Date().toISOString(),
-    }));
-}
-
-function sortLeaderboardRows(
-  rows: ComputedLeaderboardRow[],
-  sortBy: LeaderboardSortBy,
-  order: LeaderboardOrder
-): ComputedLeaderboardRow[] {
-  const direction = order === 'asc' ? 1 : -1;
-  return [...rows].sort((a, b) => {
-    const left =
-      sortBy === 'winrate'
-        ? a.winRate
-        : sortBy === 'trades'
-          ? a.totalTrades
-          : sortBy === 'sharpe'
-            ? a.sharpeRatio
-            : a.totalROI;
-    const right =
-      sortBy === 'winrate'
-        ? b.winRate
-        : sortBy === 'trades'
-          ? b.totalTrades
-          : sortBy === 'sharpe'
-            ? b.sharpeRatio
-            : b.totalROI;
-
-    if (left === right) {
-      return (b.totalROI - a.totalROI) * direction;
-    }
-    return (left - right) * direction;
-  });
-}
 
 router.get('/summary', async (c) => {
   try {
@@ -761,9 +616,9 @@ router.get('/swarm-history', async (c) => {
         logs.find((l) => l.agentName.includes(name))?.confidence ?? 0;
       return {
         cycle: `C${idx + 1}`,
-        analyst: getConf('market'),
-        sentiment: getConf('sentiment'),
-        risk: getConf('risk'),
+        market_analyst: getConf('market'),
+        sentiment_agent: getConf('sentiment'),
+        risk_manager: getConf('risk'),
         coordinator: getConf('coordinator'),
       };
     });
@@ -804,68 +659,70 @@ router.get('/swarm-history', async (c) => {
   }
 });
 
+type PacificaPeriod = 'all' | '30d' | '7d' | '1d';
+type PacificaSortBy = 'pnl' | 'equity' | 'volume';
+
+function getPnlForPeriod(entry: PacificaLeaderboardEntry, period: PacificaPeriod): number {
+  const raw =
+    period === '1d' ? entry.pnl_1d :
+    period === '7d' ? entry.pnl_7d :
+    period === '30d' ? entry.pnl_30d :
+    entry.pnl_all_time;
+  return parseFloat(raw) || 0;
+}
+
+function getVolumeForPeriod(entry: PacificaLeaderboardEntry, period: PacificaPeriod): number {
+  const raw =
+    period === '1d' ? entry.volume_1d :
+    period === '7d' ? entry.volume_7d :
+    period === '30d' ? entry.volume_30d :
+    entry.volume_all_time;
+  return Math.abs(parseFloat(raw) || 0);
+}
+
+function mapPacificaLeaderboard(
+  entries: PacificaLeaderboardEntry[],
+  period: PacificaPeriod,
+  sortBy: PacificaSortBy,
+): Array<{
+  walletAddress: string;
+  username: string | null;
+  pnl: number;
+  equity: number;
+  volume: number;
+  openInterest: number;
+}> {
+  return entries
+    .map((entry) => ({
+      walletAddress: entry.address,
+      username: entry.username,
+      pnl: getPnlForPeriod(entry, period),
+      equity: parseFloat(entry.equity_current) || 0,
+      volume: getVolumeForPeriod(entry, period),
+      openInterest: parseFloat(entry.oi_current) || 0,
+    }))
+    .sort((a, b) => {
+      const key = sortBy === 'equity' ? 'equity' : sortBy === 'volume' ? 'volume' : 'pnl';
+      return b[key] - a[key];
+    });
+}
+
 router.get('/leaderboard-teaser', async (c) => {
   try {
     const limitInput = Number.parseInt(c.req.query('limit') ?? '3', 10);
     const limit = Number.isFinite(limitInput) ? Math.min(Math.max(limitInput, 1), 10) : 3;
     const periodRaw = (c.req.query('period') ?? 'all').toLowerCase();
-    const period: LeaderboardPeriod = periodRaw === '7d' || periodRaw === '30d' ? periodRaw : 'all';
+    const period: PacificaPeriod =
+      periodRaw === '7d' ? '7d' : periodRaw === '30d' ? '30d' : periodRaw === '1d' ? '1d' : 'all';
 
-    if (!dbAvailable) {
-      return c.json(successEnvelope([]));
-    }
+    const raw = await pacificaClient.getLeaderboard();
+    const mapped = mapPacificaLeaderboard(raw, period, 'pnl');
+    const items = mapped.slice(0, limit).map((row, index) => ({
+      rank: index + 1,
+      ...row,
+    }));
 
-    try {
-      const rows = await db
-        .select({
-          rank: leaderboard.rank,
-          totalROI: leaderboard.totalROI,
-          winRate: leaderboard.winRate,
-          totalTrades: leaderboard.totalTrades,
-          updatedAt: leaderboard.updatedAt,
-          walletAddress: users.walletAddress,
-          username: users.username,
-        })
-        .from(leaderboard)
-        .innerJoin(users, eq(leaderboard.userId, users.id))
-        .orderBy(desc(leaderboard.totalROI), desc(leaderboard.winRate))
-        .limit(limit);
-
-      if (rows.length === 0 || period !== 'all') {
-        const computed = sortLeaderboardRows(
-          await buildComputedLeaderboardWithPeriod(period),
-          'roi',
-          'desc'
-        )
-          .slice(0, limit)
-          .map((row: any, index: any) => ({
-            rank: index + 1,
-            walletAddress: row.walletAddress,
-            username: row.username,
-            totalROI: row.totalROI,
-            winRate: row.winRate,
-            totalTrades: row.totalTrades,
-            updatedAt: row.updatedAt,
-          }));
-
-        return c.json(successEnvelope(computed));
-      }
-
-      const normalized = rows.map((row: any, index: any) => ({
-        rank: row.rank ?? index + 1,
-        walletAddress: row.walletAddress,
-        username: row.username,
-        totalROI: parseNumber(row.totalROI, 0),
-        winRate: parseNumber(row.winRate, 0),
-        totalTrades: row.totalTrades ?? 0,
-        updatedAt: toIso(row.updatedAt),
-      }));
-
-      return c.json(successEnvelope(normalized));
-    } catch (dbErr) {
-      console.warn('[Dashboard] DB query failed:', dbErr);
-      return c.json(successEnvelope([]));
-    }
+    return c.json(successEnvelope(items));
   } catch (error) {
     console.error('[Dashboard] Error fetching leaderboard teaser:', error);
     return c.json(errorEnvelope('Failed to fetch leaderboard teaser'), 500);
@@ -891,97 +748,29 @@ router.get('/leaderboard', async (c) => {
       }
     }
 
-    const sortByRaw = (c.req.query('sortBy') ?? 'roi').toLowerCase() as LeaderboardSortBy;
-    const orderRaw = (c.req.query('order') ?? 'desc').toLowerCase() as LeaderboardOrder;
+    const sortByRaw = (c.req.query('sortBy') ?? 'pnl').toLowerCase() as PacificaSortBy;
+    const sortBy: PacificaSortBy =
+      sortByRaw === 'equity' ? 'equity' : sortByRaw === 'volume' ? 'volume' : 'pnl';
     const periodRaw = (c.req.query('period') ?? 'all').toLowerCase();
-    const period: LeaderboardPeriod = periodRaw === '7d' || periodRaw === '30d' ? periodRaw : 'all';
+    const period: PacificaPeriod =
+      periodRaw === '7d' ? '7d' : periodRaw === '30d' ? '30d' : periodRaw === '1d' ? '1d' : 'all';
 
-    const sortColumn =
-      sortByRaw === 'winrate'
-        ? leaderboard.winRate
-        : sortByRaw === 'trades'
-          ? leaderboard.totalTrades
-          : sortByRaw === 'sharpe'
-            ? leaderboard.sharpeRatio
-            : leaderboard.totalROI;
+    const raw = await pacificaClient.getLeaderboard();
+    const all = mapPacificaLeaderboard(raw, period, sortBy);
 
-    const primaryOrder = orderRaw === 'asc' ? asc(sortColumn) : desc(sortColumn);
-    const secondaryOrder = desc(leaderboard.totalROI);
-
-    const rows = await db
-      .select({
-        dbRank: leaderboard.rank,
-        totalROI: leaderboard.totalROI,
-        winRate: leaderboard.winRate,
-        sharpeRatio: leaderboard.sharpeRatio,
-        totalTrades: leaderboard.totalTrades,
-        updatedAt: leaderboard.updatedAt,
-        walletAddress: users.walletAddress,
-        username: users.username,
-      })
-      .from(leaderboard)
-      .innerJoin(users, eq(leaderboard.userId, users.id))
-      .orderBy(primaryOrder, secondaryOrder)
-      .offset(offset)
-      .limit(limit + 1);
-
-    if (rows.length === 0 || period !== 'all') {
-      const computedSorted = sortLeaderboardRows(
-        await buildComputedLeaderboardWithPeriod(period),
-        sortByRaw,
-        orderRaw
-      );
-      const pageRows = computedSorted.slice(offset, offset + limit);
-      const hasMore = computedSorted.length > offset + limit;
-      const nextOffset = offset + pageRows.length;
-      const nextCursor = hasMore ? Buffer.from(String(nextOffset)).toString('base64url') : null;
-
-      const items = pageRows.map((row, index) => ({
-        rank: offset + index + 1,
-        globalRank: null,
-        walletAddress: row.walletAddress,
-        username: row.username,
-        totalROI: row.totalROI,
-        winRate: row.winRate,
-        sharpeRatio: row.sharpeRatio,
-        totalTrades: row.totalTrades,
-        updatedAt: row.updatedAt,
-      }));
-
-      return c.json(
-        successEnvelope({
-          items,
-          pageInfo: {
-            limit,
-            cursor: cursorRaw ?? null,
-            nextCursor,
-            hasMore,
-          },
-        })
-      );
-    }
-
-    const hasMore = rows.length > limit;
-    const pageRows = hasMore ? rows.slice(0, limit) : rows;
-
-    const normalized = pageRows.map((row, index) => ({
-      rank: offset + index + 1,
-      globalRank: row.dbRank,
-      walletAddress: row.walletAddress,
-      username: row.username,
-      totalROI: parseNumber(row.totalROI, 0),
-      winRate: parseNumber(row.winRate, 0),
-      sharpeRatio: parseNumber(row.sharpeRatio, 0),
-      totalTrades: row.totalTrades ?? 0,
-      updatedAt: toIso(row.updatedAt),
-    }));
-
-    const nextOffset = offset + normalized.length;
+    const pageRows = all.slice(offset, offset + limit);
+    const hasMore = all.length > offset + limit;
+    const nextOffset = offset + pageRows.length;
     const nextCursor = hasMore ? Buffer.from(String(nextOffset)).toString('base64url') : null;
+
+    const items = pageRows.map((row, index) => ({
+      rank: offset + index + 1,
+      ...row,
+    }));
 
     return c.json(
       successEnvelope({
-        items: normalized,
+        items,
         pageInfo: {
           limit,
           cursor: cursorRaw ?? null,

@@ -3,6 +3,23 @@ import PriceChart from './PriceChart';
 import SwarmStatus, { SwarmAgentStatus } from './SwarmStatus';
 import TradesTable from './TradesTable';
 import { useWalletContext } from './WalletConnect';
+import { fetchPacificaMarketData, type MarketData, type MarketDataMap } from '../lib/pacifica';
+
+const SYMBOLS = ['BTC', 'ETH', 'SOL', 'AVAX', 'LINK', 'XRP', 'DOGE', 'WLD'] as const;
+type Symbol = (typeof SYMBOLS)[number];
+
+const COIN_CONFIG: Record<string, { bg: string; char: string }> = {
+  BTC: { bg: '#F7931A', char: 'B' },
+  ETH: { bg: '#627EEA', char: 'E' },
+  SOL: { bg: '#9945FF', char: 'S' },
+  AVAX: { bg: '#E84142', char: 'A' },
+  LINK: { bg: '#2A5ADA', char: 'L' },
+  XRP: { bg: '#00AAE4', char: 'X' },
+  DOGE: { bg: '#C2A633', char: 'D' },
+  WLD: { bg: '#2D2D2D', char: 'W' },
+};
+
+const EMPTY_MARKET: MarketData = { price: 0, bid: 0, ask: 0, change: 0, high: 0, low: 0, volume: '$0', fundingRate: '--', maxLeverage: 10, minOrderSize: '10', lotSize: '0.001' };
 
 interface DashboardSummary {
   totalBalance: number;
@@ -43,10 +60,10 @@ interface LeaderboardTeaserEntry {
   rank: number;
   walletAddress: string;
   username?: string | null;
-  totalROI: number;
-  winRate: number;
-  totalTrades: number;
-  updatedAt: string;
+  pnl: number;
+  equity: number;
+  volume: number;
+  openInterest: number;
 }
 
 interface SwarmStatusResponse {
@@ -164,6 +181,16 @@ async function fetchWithRetry<T>(
 export default function DashboardContent() {
   const { walletAddress, isConnected } = useWalletContext();
 
+  const [selectedSymbol, setSelectedSymbol] = useState<Symbol>(() => {
+    try {
+      const stored = localStorage.getItem('pacfi_chart_symbol');
+      return stored && SYMBOLS.includes(stored as Symbol) ? (stored as Symbol) : 'BTC';
+    } catch {
+      return 'BTC';
+    }
+  });
+  const [marketDataMap, setMarketDataMap] = useState<MarketDataMap>({});
+
   const [summary, setSummary] = useState<DashboardSummary>(DEFAULT_SUMMARY);
   const [positions, setPositions] = useState<DashboardPosition[]>([]);
   const [trades, setTrades] = useState<DashboardTrade[]>([]);
@@ -175,6 +202,27 @@ export default function DashboardContent() {
   const [loading, setLoading] = useState(false);
   const [panelErrors, setPanelErrors] = useState<Partial<Record<PanelKey, string>>>({});
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
+  const [isRunningSwarm, setIsRunningSwarm] = useState(false);
+  const [swarmError, setSwarmError] = useState<string | null>(null);
+
+  // Sync symbol to localStorage so Trading page picks it up
+  useEffect(() => {
+    try { localStorage.setItem('pacfi_chart_symbol', selectedSymbol); } catch {}
+  }, [selectedSymbol]);
+
+  // Live market data for coin bar
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const data = await fetchPacificaMarketData(SYMBOLS as unknown as string[], true);
+        if (!cancelled) setMarketDataMap(data);
+      } catch {}
+    };
+    void load();
+    const interval = window.setInterval(load, 8000);
+    return () => { cancelled = true; window.clearInterval(interval); };
+  }, []);
 
   const loadDashboard = useCallback(async () => {
     if (!isConnected || !walletAddress) {
@@ -258,6 +306,52 @@ export default function DashboardContent() {
     return () => window.clearInterval(timer);
   }, [isConnected, walletAddress, loadDashboard]);
 
+  const runSwarm = useCallback(async () => {
+    if (isRunningSwarm) return;
+    setIsRunningSwarm(true);
+    setSwarmError(null);
+
+    // Show analyzing state immediately
+    setSwarm((prev) => ({
+      ...prev,
+      agents: DEFAULT_SWARM_AGENTS.map((a) => ({ ...a, status: 'analyzing' as const })),
+    }));
+
+    try {
+      const res = await fetch(`${API_BASE}/agent/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol: selectedSymbol, portfolioBalance: 10000, autoTrade: false }),
+      });
+      const result = await res.json();
+
+      if (result.success && result.data) {
+        const { decision, marketContext } = result.data;
+        const price = marketContext?.price ?? 0;
+        const fundingRate = marketContext?.fundingRate ?? 0;
+        const fundingPct = (fundingRate * 100).toFixed(4);
+
+        setSwarm({
+          agents: [
+            { id: 'market_analyst', name: 'Market Analyst', role: 'Technical Analysis', status: 'done', decision: decision.action, confidence: Math.round(decision.confidence * 0.9), reasoning: price > 0 ? `Price: $${price.toLocaleString('en-US', { maximumFractionDigits: 2 })}` : decision.reasoning },
+            { id: 'sentiment_agent', name: 'Sentiment Agent', role: 'Market Sentiment', status: 'done', decision: decision.action, confidence: Math.round(decision.confidence * 0.85), reasoning: `Funding: ${fundingPct}%` },
+            { id: 'risk_manager', name: 'Risk Manager', role: 'Position Sizing', status: 'done', decision: decision.action, confidence: Math.round(decision.confidence * 0.95), reasoning: decision.positionSize ? `Size: $${decision.positionSize} · Lev: ${decision.leverage ?? 1}x` : decision.reasoning },
+            { id: 'coordinator', name: 'Coordinator', role: 'Final Decision', status: 'done', decision: decision.action, confidence: decision.confidence, reasoning: decision.reasoning },
+          ],
+          lastRun: new Date().toISOString(),
+        });
+      } else {
+        setSwarmError(result.error ?? 'Analysis failed');
+        setSwarm((prev) => ({ ...prev, agents: DEFAULT_SWARM_AGENTS }));
+      }
+    } catch {
+      setSwarmError('Could not reach backend. Check server is running.');
+      setSwarm((prev) => ({ ...prev, agents: DEFAULT_SWARM_AGENTS }));
+    } finally {
+      setIsRunningSwarm(false);
+    }
+  }, [isRunningSwarm, selectedSymbol]);
+
   const statCards = useMemo(
     () => [
       {
@@ -292,10 +386,9 @@ export default function DashboardContent() {
     [summary]
   );
 
-  const chartPosition = positions[0];
-  const chartSymbol = chartPosition?.symbol ?? 'BTC/USD';
-  const chartPrice = chartPosition?.markPrice ?? 0;
-  const chartChange = chartPosition?.pnlPct ?? 0;
+  const activeMarket: MarketData = marketDataMap[selectedSymbol] ?? EMPTY_MARKET;
+  const chartPrice = activeMarket.price;
+  const chartChange = activeMarket.change;
 
   const mappedTrades = trades.map((trade) => ({
     id: trade.id,
@@ -314,15 +407,18 @@ export default function DashboardContent() {
   const hasGlobalError = Object.keys(panelErrors).length > 0;
 
   return (
-    <div style={{ padding: '24px 28px', display: 'flex', flexDirection: 'column', gap: 20 }}>
+    <div
+      className="grid-bg"
+      style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: 16 }}
+    >
       {!isConnected && (
         <div
           className="card"
           style={{
-            background: '#FFFBEB',
-            border: '1px solid #FDE68A',
-            color: '#92400E',
-            fontSize: 13,
+            background: '#FEF2F2',
+            border: '1px solid #FECACA',
+            color: '#991B1B',
+            fontSize: 12,
             fontWeight: 600,
           }}
         >
@@ -334,10 +430,10 @@ export default function DashboardContent() {
         <div
           className="card"
           style={{
-            background: '#FEF2F2',
-            border: '1px solid #FECACA',
-            color: '#991B1B',
-            fontSize: 12,
+            background: '#FFFBEB',
+            border: '1px solid #FDE68A',
+            color: '#92400E',
+            fontSize: 11,
           }}
         >
           Some panels failed to refresh. Retry to sync latest data.
@@ -352,6 +448,7 @@ export default function DashboardContent() {
       )}
 
       <div
+        className="dashboard-stat-grid"
         style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(4, 1fr)',
@@ -365,22 +462,82 @@ export default function DashboardContent() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
               <span
                 className="stat-change num"
-                style={{ color: s.positive ? '#10B981' : '#EF4444' }}
+                style={{ color: s.positive ? '#22C55E' : '#EF4444' }}
               >
                 {s.change}
               </span>
-              <span style={{ fontSize: 11, color: '#9CA3AF' }}>{s.sub}</span>
+              <span style={{ fontSize: 10, color: '#64748B' }}>{s.sub}</span>
             </div>
           </div>
         ))}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 14 }}>
-        <PriceChart symbol={chartSymbol} currentPrice={chartPrice} change24h={chartChange} />
+      {/* Coin selector bar — synced with Trading page via localStorage */}
+      <div className="card" style={{ padding: '10px 12px' }}>
+        <div style={{ display: 'flex', gap: 6, overflowX: 'auto', scrollbarWidth: 'none' }}>
+          {SYMBOLS.map((sym) => {
+            const cfg = COIN_CONFIG[sym];
+            const md = marketDataMap[sym];
+            const active = sym === selectedSymbol;
+            return (
+              <button
+                key={sym}
+                onClick={() => setSelectedSymbol(sym)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 7,
+                  padding: '7px 12px',
+                  borderRadius: 12,
+                  border: active ? `1.5px solid ${cfg.bg}` : '1px solid #E2E8F0',
+                  background: active ? `${cfg.bg}18` : '#F8FAFC',
+                  cursor: 'pointer',
+                  flexShrink: 0,
+                  transition: 'all 0.12s ease',
+                }}
+              >
+                <span
+                  style={{
+                    width: 22,
+                    height: 22,
+                    borderRadius: '50%',
+                    background: cfg.bg,
+                    color: '#fff',
+                    fontSize: 10,
+                    fontWeight: 800,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                  }}
+                >
+                  {cfg.char}
+                </span>
+                <div style={{ textAlign: 'left' }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: active ? '#0F172A' : '#334155' }}>{sym}</div>
+                  {md && md.price > 0 ? (
+                    <div className="num" style={{ fontSize: 10, fontWeight: 700, color: md.change >= 0 ? '#059669' : '#DC2626' }}>
+                      {md.change >= 0 ? '+' : ''}{md.change.toFixed(2)}%
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 10, color: '#94A3B8' }}>--</div>
+                  )}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="dashboard-chart-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 14 }}>
+        <PriceChart symbol={selectedSymbol} currentPrice={chartPrice} change24h={chartChange} />
         <SwarmStatus
           agents={swarm.agents}
           lastRun={swarm.lastRun}
           loading={loading}
+          isRunningSwarm={isRunningSwarm}
+          swarmError={swarmError}
+          onRunSwarm={() => void runSwarm()}
           onRefresh={() => void loadDashboard()}
         />
       </div>
@@ -388,44 +545,58 @@ export default function DashboardContent() {
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
         <div
           style={{
-            padding: '14px 20px',
-            borderBottom: '1px solid #F3F4F6',
+            padding: '14px 16px',
+            borderBottom: '1px solid #E2E8F0',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
           }}
         >
           <span className="card-title">Top Traders</span>
-          <a href="/leaderboard" style={{ fontSize: 12, color: '#2563EB', fontWeight: 600 }}>
+          <a href="/leaderboard" style={{ fontSize: 11, color: '#2563EB', fontWeight: 700 }}>
             Open leaderboard
           </a>
         </div>
         {leaderboardTeaser.length === 0 ? (
-          <div style={{ padding: 20, fontSize: 13, color: '#9CA3AF' }}>
+          <div style={{ padding: 20, fontSize: 12, color: '#64748B' }}>
             No leaderboard data yet.
           </div>
         ) : (
           <div
-            style={{ padding: 16, display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}
+            style={{ padding: 12, display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}
           >
             {leaderboardTeaser.map((entry) => (
               <div
                 key={`${entry.rank}-${entry.walletAddress}`}
-                style={{ border: '1px solid #E5E7EB', borderRadius: 8, padding: 12 }}
+                style={{ border: '1px solid #E2E8F0', borderRadius: 14, padding: 12, background: '#F8FAFC' }}
               >
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <span style={{ fontSize: 11, color: '#9CA3AF', fontWeight: 700 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <span style={{ fontSize: 10, color: '#64748B', fontWeight: 700 }}>
                     #{entry.rank}
                   </span>
-                  <span style={{ fontSize: 11, color: '#10B981', fontWeight: 700 }}>
-                    {formatPercent(entry.totalROI)}
+                  <span
+                    style={{
+                      fontSize: 10,
+                      fontWeight: 700,
+                      color: entry.pnl >= 0 ? '#22C55E' : '#EF4444',
+                    }}
+                  >
+                    {entry.pnl >= 0 ? '+' : ''}$
+                    {Math.abs(entry.pnl) >= 1000
+                      ? `${(Math.abs(entry.pnl) / 1000).toFixed(1)}K`
+                      : Math.abs(entry.pnl).toFixed(0)}
                   </span>
                 </div>
-                <div style={{ fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 4 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: '#0F172A', marginBottom: 4 }}>
                   {entry.username || shortWallet(entry.walletAddress)}
                 </div>
-                <div style={{ fontSize: 11, color: '#9CA3AF' }}>
-                  Win rate {entry.winRate.toFixed(1)}% | {entry.totalTrades} trades
+                <div style={{ fontSize: 10, color: '#64748B' }}>
+                  Equity $
+                  {entry.equity >= 1_000_000
+                    ? `${(entry.equity / 1_000_000).toFixed(1)}M`
+                    : entry.equity >= 1_000
+                      ? `${(entry.equity / 1_000).toFixed(0)}K`
+                      : entry.equity.toFixed(0)}
                 </div>
               </div>
             ))}
@@ -436,8 +607,8 @@ export default function DashboardContent() {
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
         <div
           style={{
-            padding: '14px 20px',
-            borderBottom: '1px solid #F3F4F6',
+            padding: '14px 16px',
+            borderBottom: '1px solid #E2E8F0',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
@@ -446,12 +617,12 @@ export default function DashboardContent() {
           <span className="card-title">Open Positions</span>
           <span
             style={{
-              fontSize: 11,
+              fontSize: 10,
               fontWeight: 700,
               color: '#2563EB',
               background: '#EFF6FF',
-              padding: '2px 8px',
-              borderRadius: 4,
+              padding: '4px 8px',
+              borderRadius: 999,
             }}
           >
             {positions.length} Active
@@ -459,7 +630,7 @@ export default function DashboardContent() {
         </div>
 
         {positions.length === 0 ? (
-          <div style={{ padding: 24, fontSize: 13, color: '#9CA3AF' }}>No open positions.</div>
+          <div style={{ padding: 24, fontSize: 12, color: '#64748B' }}>No open positions.</div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table className="data-table">
@@ -479,7 +650,7 @@ export default function DashboardContent() {
                 {positions.map((pos) => (
                   <tr key={`${pos.symbol}-${pos.side}`}>
                     <td>
-                      <span style={{ fontWeight: 600, color: '#111827' }}>{pos.symbol}</span>
+                      <span style={{ fontWeight: 700, color: '#0F172A' }}>{pos.symbol}</span>
                     </td>
                     <td>
                       <span
@@ -500,7 +671,7 @@ export default function DashboardContent() {
                     <td style={{ textAlign: 'right' }}>
                       <span
                         className="num"
-                        style={{ fontWeight: 700, color: pos.pnl >= 0 ? '#10B981' : '#EF4444' }}
+                        style={{ fontWeight: 700, color: pos.pnl >= 0 ? '#22C55E' : '#EF4444' }}
                       >
                         {formatCurrency(pos.pnl)}
                       </span>
@@ -508,8 +679,8 @@ export default function DashboardContent() {
                         className="num"
                         style={{
                           display: 'block',
-                          fontSize: 10,
-                          color: pos.pnlPct >= 0 ? '#10B981' : '#EF4444',
+                          fontSize: 9,
+                          color: pos.pnlPct >= 0 ? '#22C55E' : '#EF4444',
                         }}
                       >
                         {formatPercent(pos.pnlPct)}
@@ -523,7 +694,7 @@ export default function DashboardContent() {
                     <td>
                       <span
                         className="num"
-                        style={{ fontSize: 12, fontWeight: 700, color: '#6B7280' }}
+                        style={{ fontSize: 11, fontWeight: 700, color: '#64748B' }}
                       >
                         {Math.round(pos.leverage)}x
                       </span>
@@ -539,8 +710,8 @@ export default function DashboardContent() {
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
         <div
           style={{
-            padding: '14px 20px',
-            borderBottom: '1px solid #F3F4F6',
+            padding: '14px 16px',
+            borderBottom: '1px solid #E2E8F0',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
@@ -549,21 +720,39 @@ export default function DashboardContent() {
           <span className="card-title">Recent Trades</span>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             {lastUpdated && (
-              <span style={{ fontSize: 11, color: '#9CA3AF' }}>
+              <span style={{ fontSize: 10, color: '#64748B' }}>
                 Updated {new Date(lastUpdated).toLocaleTimeString()}
               </span>
             )}
-            <a href="/portfolio" style={{ fontSize: 12, color: '#2563EB', fontWeight: 600 }}>
+            <a href="/portfolio" style={{ fontSize: 11, color: '#2563EB', fontWeight: 700 }}>
               View all
             </a>
           </div>
         </div>
         {mappedTrades.length === 0 ? (
-          <div style={{ padding: 24, fontSize: 13, color: '#9CA3AF' }}>No recent trades.</div>
+          <div style={{ padding: 24, fontSize: 12, color: '#64748B' }}>No recent trades.</div>
         ) : (
           <TradesTable trades={mappedTrades} />
         )}
       </div>
+
+      <style>{`
+        @media (max-width: 1180px) {
+          .dashboard-stat-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+          }
+
+          .dashboard-chart-grid {
+            grid-template-columns: 1fr !important;
+          }
+        }
+
+        @media (max-width: 720px) {
+          .dashboard-stat-grid {
+            grid-template-columns: 1fr !important;
+          }
+        }
+      `}</style>
     </div>
   );
 }

@@ -593,17 +593,18 @@ export default function SwarmVisualization({
             bottom: '16px',
             left: '50%',
             transform: 'translateX(-50%)',
-            background: 'rgba(0,0,0,0.7)',
-            backdropFilter: 'blur(8px)',
-            color: '#fff',
+            background: 'rgba(255,255,255,0.96)',
+            backdropFilter: 'blur(10px)',
+            color: '#0F172A',
             padding: '8px 18px',
-            borderRadius: '20px',
+            borderRadius: '999px',
             fontSize: '12px',
             display: 'flex',
             alignItems: 'center',
             gap: '8px',
-            boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
-            fontWeight: 500,
+            boxShadow: '0 12px 28px rgba(15,23,42,0.12)',
+            border: '1px solid #DBE4F0',
+            fontWeight: 600,
             zIndex: 100,
           }}
         >
@@ -612,7 +613,7 @@ export default function SwarmVisualization({
               width: '7px',
               height: '7px',
               borderRadius: '50%',
-              background: '#4CAF50',
+              background: '#10B981',
               animation: 'pulse 1.5s ease-in-out infinite',
             }}
           />

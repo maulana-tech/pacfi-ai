@@ -131,11 +131,16 @@ export async function fetchAgentStatus(): Promise<AgentStatus> {
 // Market data types and fetching
 export type MarketData = {
   price: number;
-  change: number; // 24h change percentage
-  high: number; // 24h high
-  low: number; // 24h low
-  volume: string; // Volume display string
-  fundingRate: string; // Funding rate display string
+  bid: number;
+  ask: number;
+  change: number;
+  high: number;
+  low: number;
+  volume: string;
+  fundingRate: string;
+  maxLeverage: number;
+  minOrderSize: string;
+  lotSize: string;
 };
 
 export type MarketDataMap = Record<string, MarketData>;
@@ -151,27 +156,42 @@ const CACHE_TTL_MS = 5000; // 5 seconds
 const DEFAULT_MARKET_DATA: MarketDataMap = {
   BTC: {
     price: 45230.5,
+    bid: 45225.0,
+    ask: 45236.0,
     change: 2.34,
     high: 45890,
     low: 44120,
     volume: '$2.4B',
     fundingRate: '0.0082%',
+    maxLeverage: 20,
+    minOrderSize: '10',
+    lotSize: '0.001',
   },
   ETH: {
     price: 2845.2,
+    bid: 2844.5,
+    ask: 2845.9,
     change: -1.12,
     high: 2920,
     low: 2800,
     volume: '$1.1B',
     fundingRate: '-0.0031%',
+    maxLeverage: 20,
+    minOrderSize: '10',
+    lotSize: '0.01',
   },
   SOL: {
     price: 145.3,
+    bid: 145.1,
+    ask: 145.5,
     change: 4.21,
     high: 148,
     low: 138.5,
     volume: '$380M',
     fundingRate: '0.0120%',
+    maxLeverage: 20,
+    minOrderSize: '10',
+    lotSize: '0.1',
   },
 };
 
