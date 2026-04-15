@@ -56,6 +56,20 @@ function fmtChange(c: number): string {
 
 const EMPTY_MARKET: MarketData = { price: 0, bid: 0, ask: 0, change: 0, high: 0, low: 0, volume: '$0', fundingRate: '--', maxLeverage: 10, minOrderSize: '10', lotSize: '0.001' };
 
+const API_BASE =
+  (import.meta.env.PUBLIC_API_URL as string | undefined) ||
+  (import.meta.env.VITE_API_URL as string | undefined) ||
+  'http://localhost:3001';
+
+interface AISwarmResult {
+  action: 'BUY' | 'SELL' | 'HOLD';
+  confidence: number;
+  reasoning: string;
+  positionSize?: number;
+  leverage?: number;
+  stopLossPct?: number;
+}
+
 export default function TradingContent() {
   const { walletAddress, isConnected, signMessage } = useWalletContext();
   const [selectedSymbol, setSelectedSymbol] = useState<Symbol>(() => {
@@ -80,6 +94,9 @@ export default function TradingContent() {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [walletBalance, setWalletBalance] = useState<number | null>(null);
+  const [aiAnalysis, setAiAnalysis] = useState<AISwarmResult | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
 
   useEffect(() => {
     try {
@@ -147,6 +164,35 @@ export default function TradingContent() {
   const sizeNum = Number.parseFloat(size) || 0;
   const priceNum = orderType === 'limit' ? (Number.parseFloat(limitPrice) || 0) : market.price;
   const notional = sizeNum * priceNum;
+
+  async function runAIAnalysis() {
+    setIsAnalyzing(true);
+    setAnalysisError(null);
+    try {
+      const res = await fetch(`${API_BASE}/agent/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol: selectedSymbol, portfolioBalance: walletBalance ?? 10000 }),
+      });
+      const json = await res.json();
+      if (json.success && json.data?.decision) {
+        setAiAnalysis(json.data.decision);
+      } else {
+        setAnalysisError(json.error || 'Analysis failed');
+      }
+    } catch (err) {
+      setAnalysisError(err instanceof Error ? err.message : 'Network error');
+    } finally {
+      setIsAnalyzing(false);
+    }
+  }
+
+  function applyAIToOrder() {
+    if (!aiAnalysis) return;
+    if (aiAnalysis.action === 'BUY') setSide('buy');
+    else if (aiAnalysis.action === 'SELL') setSide('sell');
+    if (aiAnalysis.leverage) setLeverage(Math.min(aiAnalysis.leverage, maxLev));
+  }
 
   async function refreshBalance() {
     if (!walletAddress) return;
@@ -246,6 +292,78 @@ export default function TradingContent() {
         </div>
       </div>
 
+      <div className="card" style={{ padding: '14px 18px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'linear-gradient(135deg, #2563EB 0%, #7C3AED 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+              <svg width="16" height="16" viewBox="0 0 14 14" fill="none"><rect x="2" y="4.5" width="10" height="7" rx="1.5" stroke="#fff" strokeWidth="1.3" /><path d="M7 1.5v3" stroke="#fff" strokeWidth="1.3" strokeLinecap="round" /><circle cx="7" cy="1.5" r="1" fill="#fff" /><circle cx="4.5" cy="8" r="1" fill="#fff" /><circle cx="9.5" cy="8" r="1" fill="#fff" /><path d="M5 10.5h4" stroke="#fff" strokeWidth="1.3" strokeLinecap="round" /></svg>
+            </div>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', lineHeight: 1.2 }}>AI Swarm Analysis</div>
+              <div style={{ fontSize: 11, color: '#64748B' }}>
+                {aiAnalysis && !isAnalyzing ? `4 agents · ${selectedSymbol}` : 'Market Analyst · Sentiment · Risk · Coordinator'}
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={runAIAnalysis}
+            disabled={isAnalyzing}
+            style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', borderRadius: 12, border: 'none', background: isAnalyzing ? '#94A3B8' : 'linear-gradient(135deg, #2563EB, #7C3AED)', color: '#fff', fontWeight: 700, fontSize: 12, cursor: isAnalyzing ? 'not-allowed' : 'pointer', flexShrink: 0 }}
+          >
+            {isAnalyzing ? (
+              <>
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{ animation: 'spin 1s linear infinite' }}><circle cx="6" cy="6" r="4.5" stroke="rgba(255,255,255,0.4)" strokeWidth="1.5" /><path d="M6 1.5A4.5 4.5 0 0 1 10.5 6" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" /></svg>
+                Analyzing...
+              </>
+            ) : (
+              <>
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1l1.3 3.7H11L8.2 6.9l1 3.6L6 8.4l-3.2 2.1 1-3.6L1 4.7h3.7L6 1z" fill="#fff" /></svg>
+                Ask AI
+              </>
+            )}
+          </button>
+        </div>
+
+        {analysisError && (
+          <div style={{ marginTop: 12, padding: '10px 14px', borderRadius: 10, background: '#FFF1F2', border: '1px solid #FECDD3', fontSize: 12, color: '#9F1239' }}>
+            {analysisError}
+          </div>
+        )}
+
+        {aiAnalysis && !isAnalyzing && (
+          <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 999, fontWeight: 800, fontSize: 13, background: aiAnalysis.action === 'BUY' ? '#F0FDF4' : aiAnalysis.action === 'SELL' ? '#FFF1F2' : '#F8FAFC', color: aiAnalysis.action === 'BUY' ? '#059669' : aiAnalysis.action === 'SELL' ? '#DC2626' : '#475569', border: `1.5px solid ${aiAnalysis.action === 'BUY' ? '#BBF7D0' : aiAnalysis.action === 'SELL' ? '#FECDD3' : '#E2E8F0'}` }}>
+                {aiAnalysis.action === 'BUY' ? '▲' : aiAnalysis.action === 'SELL' ? '▼' : '■'} {aiAnalysis.action}
+              </div>
+              <div style={{ flex: 1, minWidth: 120 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, fontWeight: 700, color: '#64748B', marginBottom: 4 }}>
+                  <span>Confidence</span><span className="num">{aiAnalysis.confidence}%</span>
+                </div>
+                <div style={{ height: 6, borderRadius: 999, background: '#E2E8F0', overflow: 'hidden' }}>
+                  <div style={{ height: '100%', width: `${aiAnalysis.confidence}%`, borderRadius: 999, background: aiAnalysis.confidence >= 70 ? '#10B981' : aiAnalysis.confidence >= 50 ? '#F59E0B' : '#EF4444', transition: 'width 0.6s ease' }} />
+                </div>
+              </div>
+              {aiAnalysis.leverage && <div style={{ fontSize: 11, fontWeight: 700, color: '#334155', background: '#F1F5F9', padding: '4px 10px', borderRadius: 999 }}>Lev {aiAnalysis.leverage}x</div>}
+              {aiAnalysis.stopLossPct && <div style={{ fontSize: 11, fontWeight: 700, color: '#DC2626', background: '#FFF1F2', padding: '4px 10px', borderRadius: 999 }}>SL {aiAnalysis.stopLossPct}%</div>}
+            </div>
+            <div style={{ fontSize: 12, color: '#475569', lineHeight: 1.6, padding: '10px 14px', background: '#F8FAFC', borderRadius: 10, border: '1px solid #E2E8F0' }}>
+              {aiAnalysis.reasoning}
+            </div>
+            {aiAnalysis.action !== 'HOLD' && (
+              <button
+                type="button"
+                onClick={applyAIToOrder}
+                style={{ alignSelf: 'flex-start', padding: '7px 14px', borderRadius: 10, border: '1.5px solid #2563EB', background: '#EFF6FF', color: '#2563EB', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}
+              >
+                Apply to Order →
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
       <div className="trade-grid">
         <PriceChart symbol={selectedSymbol} currentPrice={market.price} change24h={market.change} />
         <div className="card" style={{ padding: 20 }}>
@@ -292,6 +410,7 @@ export default function TradingContent() {
         }
         input[type='number']::-webkit-inner-spin-button,
         input[type='number']::-webkit-outer-spin-button { opacity: 1; }
+        @keyframes spin { to { transform: rotate(360deg); } }
       `}</style>
     </div>
   );
