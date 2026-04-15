@@ -65,6 +65,22 @@ PACIFICA_AGENT_PRIVATE_KEY=<base58_private_key>
 PACIFICA_AGENT_ACCOUNT=<agent_wallet_address>
 ```
 
+## AI Models
+
+Supported model providers (priority order):
+
+| Provider       | Env Variable         | Deep Model                     | Quick Model                         |
+| -------------- | -------------------- | ------------------------------ | ----------------------------------- |
+| **OpenRouter** | `OPENROUTER_API_KEY` | google/gemma-4-26b-a4b-it:free | nvidia/nemotron-3-nano-30b-a3b:free |
+| **GLM**        | `GLM_API_KEY`        | glm-4-plus                     | glm-4-flash                         |
+| **DashScope**  | `DASHSCOPE_API_KEY`  | qwen-max                       | qwen-turbo                          |
+
+Get keys from:
+
+- OpenRouter: https://openrouter.ai/keys
+- GLM: https://open.bigmodel.cn/
+- DashScope: https://dashscope.console.aliyun.com/
+
 ## Key conventions
 
 - **ESM**: All packages use `"type": "module"`
