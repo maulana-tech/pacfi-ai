@@ -78,7 +78,7 @@ interface ApiEnvelope<T> {
   timestamp: string;
 }
 
-type PanelKey = 'summary' | 'positions' | 'trades' | 'swarm' | 'leaderboard';
+type PanelKey = 'summary' | 'positions' | 'swarm' | 'leaderboard';
 
 const API_BASE =
   (import.meta.env.PUBLIC_API_URL as string | undefined) ||
@@ -193,7 +193,6 @@ export default function DashboardContent() {
 
   const [summary, setSummary] = useState<DashboardSummary>(DEFAULT_SUMMARY);
   const [positions, setPositions] = useState<DashboardPosition[]>([]);
-  const [trades, setTrades] = useState<DashboardTrade[]>([]);
   const [swarm, setSwarm] = useState<SwarmStatusResponse>({
     agents: DEFAULT_SWARM_AGENTS,
     lastRun: null,
@@ -228,7 +227,6 @@ export default function DashboardContent() {
     if (!isConnected || !walletAddress) {
       setSummary(DEFAULT_SUMMARY);
       setPositions([]);
-      setTrades([]);
       setSwarm({ agents: DEFAULT_SWARM_AGENTS, lastRun: null });
       setLeaderboardTeaser([]);
       setPanelErrors({});
@@ -251,12 +249,6 @@ export default function DashboardContent() {
           nextErrors.positions =
             error instanceof Error ? error.message : 'Failed to load positions';
           setPositions([]);
-        }),
-      fetchWithRetry<DashboardTrade[]>('/dashboard/trades?limit=5', walletAddress, 7000, 1)
-        .then((data) => setTrades(data))
-        .catch((error) => {
-          nextErrors.trades = error instanceof Error ? error.message : 'Failed to load trades';
-          setTrades([]);
         }),
       fetchWithRetry<SwarmStatusResponse>('/dashboard/swarm-status', walletAddress, 7000, 0)
         .then((data) =>
@@ -389,20 +381,6 @@ export default function DashboardContent() {
   const activeMarket: MarketData = marketDataMap[selectedSymbol] ?? EMPTY_MARKET;
   const chartPrice = activeMarket.price;
   const chartChange = activeMarket.change;
-
-  const mappedTrades = trades.map((trade) => ({
-    id: trade.id,
-    symbol: trade.symbol,
-    side: trade.side,
-    size: formatCompact(trade.size),
-    entryPrice: formatCompact(trade.entryPrice),
-    exitPrice: trade.exitPrice !== null ? formatCompact(trade.exitPrice) : undefined,
-    pnl: trade.pnl !== null ? formatCurrency(trade.pnl) : undefined,
-    pnlPct: trade.pnlPct ?? undefined,
-    status: trade.status,
-    leverage: Math.round(trade.leverage),
-    time: toTime(trade.executedAt),
-  }));
 
   const hasGlobalError = Object.keys(panelErrors).length > 0;
 
@@ -729,11 +707,7 @@ export default function DashboardContent() {
             </a>
           </div>
         </div>
-        {mappedTrades.length === 0 ? (
-          <div style={{ padding: 24, fontSize: 12, color: '#64748B' }}>No recent trades.</div>
-        ) : (
-          <TradesTable trades={mappedTrades} />
-        )}
+        <TradesTable walletAddress={walletAddress} limit={5} />
       </div>
 
       <style>{`
