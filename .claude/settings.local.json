@@ -19,7 +19,9 @@
       "Bash(curl -s \"https://test-api.pacifica.fi/api/v1/book?symbol=ETH&agg_level=1\")",
       "Bash(curl -s \"https://test-api.pacifica.fi/api/v1/book?symbol=SOL&agg_level=1\")",
       "Bash(pnpm --filter @pacfi/frontend add lightweight-charts)",
-      "Bash(node:*)"
+      "Bash(node:*)",
+      "Bash(pnpm --filter frontend type-check)",
+      "Bash(pnpm --filter backend build)"
     ]
   }
 }
