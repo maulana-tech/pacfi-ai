@@ -258,6 +258,12 @@ export default function SwarmContent() {
         const { decision, marketContext } = result.data;
         const execution = result.data.execution;
 
+        const price = marketContext?.price ?? marketContext?.markPrice ?? 0;
+        const fundingRate = marketContext?.fundingRate ?? 0;
+        const fundingPct = typeof fundingRate === 'number'
+          ? (fundingRate * 100).toFixed(4)
+          : fundingRate;
+
         setAgents([
           {
             id: 'market_analyst',
@@ -266,7 +272,7 @@ export default function SwarmContent() {
             status: 'done' as const,
             decision: decision.action,
             confidence: Math.round(decision.confidence * 0.9),
-            reasoning: `Price: $${marketContext.currentPrice?.toFixed(2) || 'N/A'}`,
+            reasoning: price > 0 ? `Price: $${price.toLocaleString('en-US', { maximumFractionDigits: 2 })}` : decision.reasoning,
             color: '#2563EB',
           },
           {
@@ -276,7 +282,7 @@ export default function SwarmContent() {
             status: 'done' as const,
             decision: decision.action,
             confidence: Math.round(decision.confidence * 0.85),
-            reasoning: `Funding: ${marketContext.fundingRate * 100}%`,
+            reasoning: `Funding: ${fundingPct}%`,
             color: '#7C3AED',
           },
           {
@@ -286,7 +292,9 @@ export default function SwarmContent() {
             status: 'done' as const,
             decision: decision.action,
             confidence: Math.round(decision.confidence * 0.95),
-            reasoning: `Size: $${decision.positionSize || 'N/A'}`,
+            reasoning: decision.positionSize
+              ? `Size: $${decision.positionSize} · Lev: ${decision.leverage ?? 1}x`
+              : decision.reasoning,
             color: '#0891B2',
           },
           {
