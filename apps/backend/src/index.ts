@@ -5,6 +5,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import { serve } from '@hono/node-server';
+import { serveStatic } from '@hono/node-server/serve-static';
 import { healthRouter } from './routes/health';
 import { ordersRouter } from './routes/orders';
 import { dashboardRouter } from './routes/dashboard';
@@ -23,7 +24,7 @@ const app = new Hono();
 app.use(cors());
 app.use(logger());
 
-// Routes
+// API Routes
 app.route('/health', healthRouter);
 app.route('/markets', marketsRouter);
 app.route('/orders', ordersRouter);
@@ -31,6 +32,15 @@ app.route('/dashboard', dashboardRouter);
 app.route('/builder', builderRouter);
 app.route('/agent', agentRouter);
 app.route('/swarm', swarmRouter);
+
+// Serve frontend static files
+app.use(
+  '/*',
+  serveStatic({
+    root: path.resolve(__dirname, '../../../apps/frontend/dist'),
+    index: 'index.html',
+  })
+);
 
 // 404 handler
 app.notFound((c) => {
