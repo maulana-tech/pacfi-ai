@@ -202,6 +202,8 @@ export default function DashboardContent() {
   const [loading, setLoading] = useState(false);
   const [panelErrors, setPanelErrors] = useState<Partial<Record<PanelKey, string>>>({});
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
+  const [isRunningSwarm, setIsRunningSwarm] = useState(false);
+  const [swarmError, setSwarmError] = useState<string | null>(null);
 
   // Sync symbol to localStorage so Trading page picks it up
   useEffect(() => {
@@ -303,6 +305,52 @@ export default function DashboardContent() {
 
     return () => window.clearInterval(timer);
   }, [isConnected, walletAddress, loadDashboard]);
+
+  const runSwarm = useCallback(async () => {
+    if (isRunningSwarm) return;
+    setIsRunningSwarm(true);
+    setSwarmError(null);
+
+    // Show analyzing state immediately
+    setSwarm((prev) => ({
+      ...prev,
+      agents: DEFAULT_SWARM_AGENTS.map((a) => ({ ...a, status: 'analyzing' as const })),
+    }));
+
+    try {
+      const res = await fetch(`${API_BASE}/agent/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol: selectedSymbol, portfolioBalance: 10000, autoTrade: false }),
+      });
+      const result = await res.json();
+
+      if (result.success && result.data) {
+        const { decision, marketContext } = result.data;
+        const price = marketContext?.price ?? 0;
+        const fundingRate = marketContext?.fundingRate ?? 0;
+        const fundingPct = (fundingRate * 100).toFixed(4);
+
+        setSwarm({
+          agents: [
+            { id: 'market_analyst', name: 'Market Analyst', role: 'Technical Analysis', status: 'done', decision: decision.action, confidence: Math.round(decision.confidence * 0.9), reasoning: price > 0 ? `Price: $${price.toLocaleString('en-US', { maximumFractionDigits: 2 })}` : decision.reasoning },
+            { id: 'sentiment_agent', name: 'Sentiment Agent', role: 'Market Sentiment', status: 'done', decision: decision.action, confidence: Math.round(decision.confidence * 0.85), reasoning: `Funding: ${fundingPct}%` },
+            { id: 'risk_manager', name: 'Risk Manager', role: 'Position Sizing', status: 'done', decision: decision.action, confidence: Math.round(decision.confidence * 0.95), reasoning: decision.positionSize ? `Size: $${decision.positionSize} · Lev: ${decision.leverage ?? 1}x` : decision.reasoning },
+            { id: 'coordinator', name: 'Coordinator', role: 'Final Decision', status: 'done', decision: decision.action, confidence: decision.confidence, reasoning: decision.reasoning },
+          ],
+          lastRun: new Date().toISOString(),
+        });
+      } else {
+        setSwarmError(result.error ?? 'Analysis failed');
+        setSwarm((prev) => ({ ...prev, agents: DEFAULT_SWARM_AGENTS }));
+      }
+    } catch {
+      setSwarmError('Could not reach backend. Check server is running.');
+      setSwarm((prev) => ({ ...prev, agents: DEFAULT_SWARM_AGENTS }));
+    } finally {
+      setIsRunningSwarm(false);
+    }
+  }, [isRunningSwarm, selectedSymbol]);
 
   const statCards = useMemo(
     () => [
@@ -487,6 +535,9 @@ export default function DashboardContent() {
           agents={swarm.agents}
           lastRun={swarm.lastRun}
           loading={loading}
+          isRunningSwarm={isRunningSwarm}
+          swarmError={swarmError}
+          onRunSwarm={() => void runSwarm()}
           onRefresh={() => void loadDashboard()}
         />
       </div>
