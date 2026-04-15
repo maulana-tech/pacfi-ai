@@ -2,6 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import SwarmVisualization from './SwarmVisualization';
 import { useWalletContext } from './WalletConnect';
+import {
+  buildMessageToSign,
+  buildOrderSigningPayload,
+  pacificaRequest,
+} from '../lib/pacifica';
 
 interface PacificaMarketData {
   symbol: string;
@@ -20,7 +25,7 @@ interface SwarmDecision {
   time: string;
   symbol: string;
   action: string;
-  confidence: number;
+  confidence: number | null;
   result: 'WIN' | 'LOSS' | 'OPEN';
   pnl: number;
 }
@@ -117,7 +122,7 @@ const INITIAL_AGENTS: Agent[] = [
 ];
 
 export default function SwarmContent() {
-  const { walletAddress, isConnected } = useWalletContext();
+  const { walletAddress, isConnected, signMessage } = useWalletContext();
   const [agents, setAgents] = useState<Agent[]>(INITIAL_AGENTS);
   const [isRunning, setIsRunning] = useState(false);
   const [finalDecision, setFinalDecision] = useState<{
@@ -145,6 +150,7 @@ export default function SwarmContent() {
   const [swarmHistory, setSwarmHistory] = useState<SwarmHistoryData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [autoTradeNotice, setAutoTradeNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const fetchSwarmHistory = async () => {
     if (!isConnected || !walletAddress) {
@@ -230,6 +236,7 @@ export default function SwarmContent() {
     setIsRunning(true);
     setFinalDecision(null);
     setExecutionStatus('idle');
+    setAutoTradeNotice(null);
 
     setAgents(
       INITIAL_AGENTS.map((a) => ({
@@ -244,19 +251,14 @@ export default function SwarmContent() {
     try {
       const response = await fetch(`${API_URL}/agent/analyze`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          symbol: selectedSymbol,
-          portfolioBalance: 10000,
-          autoTrade: autoTradeEnabled,
-        }),
+        headers: { 'Content-Type': 'application/json', 'X-Wallet-Address': walletAddress },
+        body: JSON.stringify({ symbol: selectedSymbol, portfolioBalance: 10000 }),
       });
 
       const result = await response.json();
 
       if (result.success && result.data) {
         const { decision, marketContext } = result.data;
-        const execution = result.data.execution;
 
         const price = marketContext?.price ?? marketContext?.markPrice ?? 0;
         const fundingRate = marketContext?.fundingRate ?? 0;
@@ -315,8 +317,70 @@ export default function SwarmContent() {
           leverage: decision.leverage || 1,
         });
 
-        if (autoTradeEnabled && execution) {
-          setExecutionStatus(execution.success ? 'success' : 'failed');
+        // ── Auto-trade: sign via Phantom and submit ──────────────────────
+        if (
+          autoTradeEnabled &&
+          (decision.action === 'BUY' || decision.action === 'SELL') &&
+          decision.confidence >= 60
+        ) {
+          setExecutionStatus('executing');
+          try {
+            // Calculate amount in base asset units from position size (USD)
+            const currentPrice =
+              price > 0
+                ? price
+                : parseFloat(
+                    marketData.find((m) => m.symbol.toUpperCase() === selectedSymbol)?.mark ?? '0'
+                  );
+            const positionUSD = decision.positionSize ?? 50;
+            const rawAmount = currentPrice > 0 ? positionUSD / currentPrice : 0.001;
+            // Round to 4 significant decimal places
+            const amount = String(parseFloat(rawAmount.toPrecision(4)));
+
+            const timestamp = Date.now();
+            const clientOrderId = crypto.randomUUID();
+            const signedSide = decision.action === 'BUY' ? 'bid' : 'ask';
+            const orderData = {
+              amount,
+              client_order_id: clientOrderId,
+              reduce_only: false,
+              side: signedSide,
+              slippage_percent: '0.5',
+              symbol: selectedSymbol,
+            };
+
+            const message = buildMessageToSign(
+              buildOrderSigningPayload('create_market_order', orderData, timestamp)
+            );
+            // Phantom opens here ↓
+            const signature = await signMessage(message);
+
+            await pacificaRequest<unknown>('/orders/create-market', walletAddress, {
+              method: 'POST',
+              body: JSON.stringify({
+                symbol: selectedSymbol,
+                side: signedSide,
+                amount,
+                leverage: decision.leverage ?? 1,
+                clientOrderId,
+                signature,
+                timestamp,
+                executionMode: 'wallet',
+              }),
+            });
+
+            setExecutionStatus('success');
+            setAutoTradeNotice({
+              type: 'success',
+              text: `${decision.action} ${selectedSymbol} submitted — ${amount} @ market`,
+            });
+          } catch (execErr) {
+            setExecutionStatus('failed');
+            setAutoTradeNotice({
+              type: 'error',
+              text: execErr instanceof Error ? execErr.message : 'Order submission failed',
+            });
+          }
         }
       } else {
         console.error('Analyze failed:', result.error);
@@ -440,6 +504,20 @@ export default function SwarmContent() {
             marketData={marketData}
           />
         </div>
+        {executionStatus === 'executing' && (
+          <div style={{ margin: '0 20px 12px', padding: '10px 16px', background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 12, fontSize: 12, color: '#1E40AF', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#3B82F6', display: 'inline-block', animation: 'pulse 1s ease-in-out infinite' }} />
+            Waiting for Phantom confirmation…
+          </div>
+        )}
+
+        {autoTradeNotice && (
+          <div style={{ margin: '0 20px 12px', padding: '10px 16px', background: autoTradeNotice.type === 'success' ? '#F0FDF4' : '#FEF2F2', border: `1px solid ${autoTradeNotice.type === 'success' ? '#BBF7D0' : '#FECACA'}`, borderRadius: 12, fontSize: 12, color: autoTradeNotice.type === 'success' ? '#166534' : '#991B1B', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span>{autoTradeNotice.type === 'success' ? '✓' : '✕'} {autoTradeNotice.text}</span>
+            <button onClick={() => setAutoTradeNotice(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, color: 'inherit', opacity: 0.6, padding: '0 4px' }}>×</button>
+          </div>
+        )}
+
         {finalDecision && (
           <div
             style={{
@@ -645,7 +723,7 @@ export default function SwarmContent() {
                         className="num"
                         style={{ fontSize: 12, fontWeight: 600, color: '#374151' }}
                       >
-                        {d.confidence}%
+                        {d.confidence != null ? `${d.confidence}%` : '—'}
                       </span>
                     </td>
                     <td>
