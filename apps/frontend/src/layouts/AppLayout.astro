@@ -130,42 +130,42 @@ const { title, activeNav = 'dashboard' } = Astro.props;
 </html>
 
 <style>
-  .app-shell {
+.app-shell {
     display: flex;
-    height: 100vh;
-    overflow: hidden;
-    background: #F9FAFB;
+    min-height: 100vh;
   }
 
-  .sidebar-wrapper {
+   .sidebar-wrapper {
     flex-shrink: 0;
     z-index: 100;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    align-self: flex-start;
   }
 
   .app-main {
     flex: 1;
-    overflow: hidden;
     display: flex;
     flex-direction: column;
     min-width: 0;
   }
 
   .app-header {
-    height: 64px;
-    background: #FFFFFF;
-    border-bottom: 1px solid #E5E7EB;
+    min-height: 64px;
+    background: transparent;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0 28px;
+    padding: 16px 28px;
     flex-shrink: 0;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
   }
 
   .header-title {
     font-size: 18px;
     font-weight: 700;
-    color: #111827;
+    color: #0F172A;
+    letter-spacing: -0.02em;
   }
 
   .header-wallet {
@@ -175,8 +175,15 @@ const { title, activeNav = 'dashboard' } = Astro.props;
 
   .app-content {
     flex: 1;
-    overflow-y: auto;
-    overflow-x: hidden;
-    scroll-behavior: smooth;
+  }
+
+  @media (max-width: 768px) {
+    .app-header {
+      padding: 14px 16px;
+    }
+
+    .header-title {
+      font-size: 18px;
+    }
   }
 </style>
