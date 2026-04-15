@@ -48,5 +48,12 @@ export interface MarketData {
   volume24h: number;
   fundingRate: number;
   openInterest: number;
-  timestamp: Date;
+  timestamp: Date | number;
+  // Extended fields used by swarm coordinator
+  markPrice?: number;
+  indexPrice?: number;
+  priceChange24h?: number;
+  high24h?: number;
+  low24h?: number;
+  leverage?: number;
 }
