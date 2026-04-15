@@ -23,7 +23,8 @@
       "Bash(pnpm --filter frontend type-check)",
       "Bash(pnpm --filter backend build)",
       "Bash(pnpm --filter backend type-check)",
-      "Bash(npx --prefix apps/backend tsx -e ' *)"
+      "Bash(npx --prefix apps/backend tsx -e ' *)",
+      "Bash(curl -s \"http://localhost:3001/dashboard/swarm-history\" -H \"X-Wallet-Address: 5LyBYEQWkXndJ29Cfgfav9TH8zkLqdKe5EHze39HSmzb\")"
     ]
   }
 }

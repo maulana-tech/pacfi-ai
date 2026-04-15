@@ -84,25 +84,60 @@ export const useWalletContext = (): WalletContextType => {
       localStorage.setItem(STORAGE_KEY_ADDRESS, currentAddress);
       setWalletAddress(currentAddress);
       setIsConnected(true);
-    } else if (providerConnected === false) {
-      // Provider explicitly says disconnected — clear everything
-      localStorage.removeItem(STORAGE_KEY_ADDRESS);
+    } else if (providerConnected === false && !readStoredAddress()) {
+      // Provider explicitly says disconnected AND there's no stored session — clear state.
+      // We don't clear when there IS a stored address because the provider might just be
+      // initializing (race condition on page load); auto-reconnect will handle that case.
       setWalletAddress(null);
       setIsConnected(false);
     }
-    // If providerConnected is undefined/null (not yet initialized), keep current localStorage state
+    // If providerConnected is undefined/null or there's a stored session, keep current state
   }, [getProvider]);
 
+  // Auto-reconnect on page load if a stored address exists.
+  // Uses onlyIfTrusted so no popup appears — it only reconnects if the
+  // wallet extension already has this site in its trusted list.
   useEffect(() => {
-    syncWalletState();
+    if (typeof window === 'undefined') return;
 
-    if (typeof window === 'undefined') {
+    const storedAddress = readStoredAddress();
+    if (!storedAddress) {
+      // No previous session — nothing to restore
+      syncWalletState();
       return;
     }
 
-    const handleWalletChange = () => {
+    const resolved = getProvider();
+    if (!resolved) {
+      // Extension not installed — keep localStorage address visible but not "active"
       syncWalletState();
-    };
+      return;
+    }
+
+    // If provider already shows connected (e.g. same-tab navigation), just sync
+    if (resolved.provider?.isConnected) {
+      syncWalletState();
+      return;
+    }
+
+    // Try silent reconnect without popup
+    resolved.provider
+      .connect({ onlyIfTrusted: true })
+      .then(() => {
+        syncWalletState();
+      })
+      .catch(() => {
+        // Extension declined silent reconnect — keep stored address so UI shows
+        // truncated address, but mark as not truly connected so signing works correctly.
+        // User can click Connect to re-authorize.
+        syncWalletState();
+      });
+  }, []); // intentionally empty — runs once on mount
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleWalletChange = () => syncWalletState();
 
     window.addEventListener('focus', handleWalletChange);
     window.addEventListener('pacfi-wallet-state-changed', handleWalletChange as EventListener);
@@ -156,7 +191,7 @@ export const useWalletContext = (): WalletContextType => {
   const handleDisconnect = useCallback(async (): Promise<void> => {
     const resolved = getProvider();
     if (resolved?.provider?.disconnect) {
-      await resolved.provider.disconnect();
+      try { await resolved.provider.disconnect(); } catch { /* ignore */ }
     }
 
     localStorage.removeItem(STORAGE_KEY_ADDRESS);
