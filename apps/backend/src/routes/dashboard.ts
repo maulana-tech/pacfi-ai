@@ -616,9 +616,9 @@ router.get('/swarm-history', async (c) => {
         logs.find((l) => l.agentName.includes(name))?.confidence ?? 0;
       return {
         cycle: `C${idx + 1}`,
-        analyst: getConf('market'),
-        sentiment: getConf('sentiment'),
-        risk: getConf('risk'),
+        market_analyst: getConf('market'),
+        sentiment_agent: getConf('sentiment'),
+        risk_manager: getConf('risk'),
         coordinator: getConf('coordinator'),
       };
     });
