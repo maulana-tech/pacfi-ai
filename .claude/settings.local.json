@@ -21,7 +21,9 @@
       "Bash(pnpm --filter @pacfi/frontend add lightweight-charts)",
       "Bash(node:*)",
       "Bash(pnpm --filter frontend type-check)",
-      "Bash(pnpm --filter backend build)"
+      "Bash(pnpm --filter backend build)",
+      "Bash(pnpm --filter backend type-check)",
+      "Bash(npx --prefix apps/backend tsx -e ' *)"
     ]
   }
 }
