@@ -95,33 +95,33 @@ export default function PriceChart({
       width: containerRef.current.clientWidth,
       height: 300,
       layout: {
-        background: { type: ColorType.Solid, color: '#0B1220' },
-        textColor: '#94A3B8',
+        background: { type: ColorType.Solid, color: '#FFFFFF' },
+        textColor: '#64748B',
         fontSize: 11,
       },
       grid: {
-        vertLines: { color: 'rgba(71, 85, 105, 0.18)' },
-        horzLines: { color: 'rgba(71, 85, 105, 0.18)' },
+        vertLines: { color: 'rgba(203, 213, 225, 0.45)' },
+        horzLines: { color: 'rgba(203, 213, 225, 0.45)' },
       },
       crosshair: {
         mode: CrosshairMode.Normal,
         vertLine: {
-          color: 'rgba(148, 163, 184, 0.5)',
+          color: 'rgba(100, 116, 139, 0.45)',
           width: 1,
-          labelBackgroundColor: '#1E293B',
+          labelBackgroundColor: '#0F172A',
         },
         horzLine: {
-          color: 'rgba(148, 163, 184, 0.45)',
+          color: 'rgba(100, 116, 139, 0.45)',
           width: 1,
-          labelBackgroundColor: '#1E293B',
+          labelBackgroundColor: '#0F172A',
         },
       },
       rightPriceScale: {
-        borderColor: 'rgba(71, 85, 105, 0.35)',
+        borderColor: '#E2E8F0',
         entireTextOnly: true,
       },
       timeScale: {
-        borderColor: 'rgba(71, 85, 105, 0.35)',
+        borderColor: '#E2E8F0',
         timeVisible: true,
         secondsVisible: false,
         rightOffset: 4,
@@ -169,6 +169,19 @@ export default function PriceChart({
       chartRef.current = null;
       areaRef.current = null;
     };
+  }, []);
+
+  useEffect(() => {
+    if (!areaRef.current) {
+      return;
+    }
+    areaRef.current.applyOptions({
+      lineColor: trendColor,
+      topColor: isPositive ? 'rgba(16, 185, 129, 0.40)' : 'rgba(239, 68, 68, 0.40)',
+      bottomColor: isPositive ? 'rgba(16, 185, 129, 0.03)' : 'rgba(239, 68, 68, 0.03)',
+      priceLineColor: trendColor,
+      crosshairMarkerBackgroundColor: trendColor,
+    });
   }, [isPositive, trendColor]);
 
   const setFallbackSeries = useCallback(() => {
@@ -240,9 +253,9 @@ export default function PriceChart({
       className="card"
       style={{
         padding: 0,
-        border: '1px solid #1E293B',
-        borderRadius: 12,
-        background: '#0B1220',
+        border: '1px solid #DBE4F0',
+        borderRadius: 18,
+        background: '#FFFFFF',
         overflow: 'hidden',
       }}
     >
@@ -252,7 +265,7 @@ export default function PriceChart({
           alignItems: 'center',
           justifyContent: 'space-between',
           padding: '14px 16px 10px',
-          borderBottom: '1px solid rgba(71, 85, 105, 0.30)',
+          borderBottom: '1px solid #E2E8F0',
           gap: 12,
           flexWrap: 'wrap',
         }}
@@ -275,11 +288,13 @@ export default function PriceChart({
             {coinChar}
           </span>
           <div>
-            <div style={{ fontSize: 11, color: '#94A3B8', fontWeight: 700, letterSpacing: '0.05em' }}>
+            <div
+              style={{ fontSize: 11, color: '#64748B', fontWeight: 700, letterSpacing: '0.05em' }}
+            >
               {symbol}/USDC
             </div>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-              <span className="num" style={{ color: '#F8FAFC', fontWeight: 800, fontSize: 20 }}>
+              <span className="num" style={{ color: '#0F172A', fontWeight: 800, fontSize: 20 }}>
                 ${formatPrice(displayPrice)}
               </span>
               <span
@@ -308,8 +323,8 @@ export default function PriceChart({
               gap: 4,
               padding: 3,
               borderRadius: 7,
-              background: '#111B2E',
-              border: '1px solid rgba(71, 85, 105, 0.35)',
+              background: '#F8FAFC',
+              border: '1px solid #E2E8F0',
             }}
           >
             {PERIODS.map((period, idx) => (
@@ -323,7 +338,7 @@ export default function PriceChart({
                   cursor: 'pointer',
                   fontSize: 11,
                   fontWeight: 700,
-                  color: activePeriod === idx ? '#FFFFFF' : '#94A3B8',
+                  color: activePeriod === idx ? '#FFFFFF' : '#64748B',
                   background: activePeriod === idx ? '#2563EB' : 'transparent',
                 }}
               >
@@ -340,18 +355,21 @@ export default function PriceChart({
           alignItems: 'center',
           justifyContent: 'space-between',
           padding: '8px 16px',
-          background: 'rgba(15, 23, 42, 0.50)',
-          borderBottom: '1px solid rgba(71, 85, 105, 0.22)',
+          background: '#F8FAFC',
+          borderBottom: '1px solid #E2E8F0',
           fontSize: 11,
-          color: '#94A3B8',
+          color: '#64748B',
         }}
       >
         <span>
           Cursor Price{' '}
-          <strong style={{ color: '#E2E8F0', fontWeight: 700 }}>${formatPrice(displayPrice)}</strong>
+          <strong style={{ color: '#0F172A', fontWeight: 700 }}>
+            ${formatPrice(displayPrice)}
+          </strong>
         </span>
         <span>
-          Cursor Time <strong style={{ color: '#E2E8F0', fontWeight: 700 }}>{crossTimeLabel}</strong>
+          Cursor Time{' '}
+          <strong style={{ color: '#0F172A', fontWeight: 700 }}>{crossTimeLabel}</strong>
         </span>
       </div>
 
@@ -365,7 +383,7 @@ export default function PriceChart({
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              background: 'rgba(11, 18, 32, 0.45)',
+              background: 'rgba(255, 255, 255, 0.78)',
               pointerEvents: 'none',
             }}
           >
@@ -374,8 +392,8 @@ export default function PriceChart({
                 width: 24,
                 height: 24,
                 borderRadius: '50%',
-                border: '2px solid rgba(148, 163, 184, 0.25)',
-                borderTopColor: '#38BDF8',
+                border: '2px solid rgba(148, 163, 184, 0.24)',
+                borderTopColor: '#2563EB',
                 animation: 'priceSpin 0.8s linear infinite',
               }}
             />
