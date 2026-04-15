@@ -64,6 +64,58 @@ const toIso = (value: Date | string | null | undefined): string => {
   return new Date(value).toISOString();
 };
 
+const extractDecisionReasoning = (rawDecision: string | null | undefined): string | null => {
+  if (!rawDecision) {
+    return null;
+  }
+
+  const trimmed = rawDecision.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+    const reasoning = parsed.reasoning ?? parsed.reason ?? parsed.explanation ?? parsed.message;
+
+    if (typeof reasoning === 'string' && reasoning.trim()) {
+      return reasoning.trim();
+    }
+
+    const action = parsed.action ?? parsed.signal;
+    if (typeof action === 'string' && action.trim()) {
+      return `Decision: ${action.trim()}`;
+    }
+  } catch {
+    // Keep falling back to plain text below.
+  }
+
+  return trimmed.startsWith('{') || trimmed.startsWith('[') ? 'Decision data available' : trimmed;
+};
+
+const extractDecisionLabel = (rawDecision: string | null | undefined): 'BUY' | 'SELL' | 'HOLD' | null => {
+  if (!rawDecision) {
+    return null;
+  }
+
+  const upper = rawDecision.toUpperCase();
+  if (upper.includes('BUY')) return 'BUY';
+  if (upper.includes('SELL')) return 'SELL';
+  if (upper.includes('HOLD')) return 'HOLD';
+
+  try {
+    const parsed = JSON.parse(rawDecision) as Record<string, unknown>;
+    const action = parsed.action ?? parsed.signal;
+    if (action === 'BUY' || action === 'SELL' || action === 'HOLD') {
+      return action;
+    }
+  } catch {
+    // Ignore malformed JSON.
+  }
+
+  return null;
+};
+
 const computeSharpe = (returns: number[]): number => {
   if (returns.length === 0) return 0;
   const mean = returns.reduce((acc, v) => acc + v, 0) / returns.length;
@@ -477,21 +529,15 @@ router.get('/swarm-status', async (c) => {
 
       const agents = DEFAULT_AGENTS.map((agent) => {
         const log = mapAgentLog(agent.id);
-        const decisionRaw = (log?.outputDecision ?? '').toUpperCase();
-        const decision = decisionRaw.includes('BUY')
-          ? 'BUY'
-          : decisionRaw.includes('SELL')
-            ? 'SELL'
-            : decisionRaw.includes('HOLD')
-              ? 'HOLD'
-              : null;
+        const decision = extractDecisionLabel(log?.outputDecision);
+        const reasoning = extractDecisionReasoning(log?.outputDecision);
 
         return {
           ...agent,
           status: log ? 'done' : 'idle',
           decision,
           confidence: log?.confidence ? parseNumber(log.confidence, 0) : null,
-          reasoning: log?.outputDecision ?? null,
+          reasoning,
         };
       });
 
