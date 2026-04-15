@@ -9,11 +9,11 @@ COPY . .
 RUN corepack enable && corepack prepare pnpm@9 --activate && \
     pnpm install
 
-# Build only frontend (backend runs with tsx)
+# Build only frontend
 RUN pnpm --filter @pacfi/frontend build
 
 # Expose port
 EXPOSE 3001
 
-# Start backend with tsx
-CMD ["npx", "tsx", "apps/backend/src/index.ts"]
+# Start backend - use npx to run tsx from node_modules
+CMD ["pnpm", "--filter", "@pacfi/backend", "dev"]
