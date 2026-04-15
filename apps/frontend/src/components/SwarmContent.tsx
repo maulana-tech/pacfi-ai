@@ -25,6 +25,26 @@ interface SwarmDecision {
   pnl: number;
 }
 
+interface AnalyzeAgent {
+  name: string;
+  decision: 'BUY' | 'SELL' | 'HOLD';
+  confidence: number;
+  reasoning: string;
+}
+
+interface AnalyzeResponse {
+  symbol: string;
+  requestedSymbol: string;
+  modelProvider: string;
+  model: string;
+  agents: AnalyzeAgent[];
+  decision: {
+    action: 'BUY' | 'SELL' | 'HOLD';
+    confidence: number;
+    leverage?: number;
+  };
+}
+
 interface AgentHistoryItem {
   cycle: string;
   market_analyst: number;
@@ -63,7 +83,7 @@ interface Agent {
 
 const API_URL = import.meta.env.PUBLIC_API_URL ?? 'http://localhost:3001';
 
-const AVAILABLE_SYMBOLS = ['BTC', 'ETH', 'SOL', 'DOGE', 'XRP', 'ADA', 'AVAX', 'LINK', 'LTC'];
+const MARKET_SYMBOLS = ['BTC', 'ETH', 'SOL', 'DOGE', 'XRP', 'ADA', 'AVAX', 'LINK', 'LTC'];
 
 const INITIAL_AGENTS: Agent[] = [
   {
@@ -96,67 +116,6 @@ const INITIAL_AGENTS: Agent[] = [
   },
 ];
 
-const MOCK_CYCLES = [
-  {
-    agents: [
-      {
-        id: 'market_analyst',
-        decision: 'BUY' as const,
-        confidence: 78,
-        reasoning: 'RSI oversold, MACD bullish crossover detected',
-      },
-      {
-        id: 'sentiment_agent',
-        decision: 'BUY' as const,
-        confidence: 65,
-        reasoning: 'Funding rate negative, sentiment shifting bullish',
-      },
-      {
-        id: 'risk_manager',
-        decision: 'BUY' as const,
-        confidence: 72,
-        reasoning: 'Risk/reward 1:3.2, position size 2% portfolio',
-      },
-      {
-        id: 'coordinator',
-        decision: 'BUY' as const,
-        confidence: 72,
-        reasoning: 'Consensus: 3/3 agents agree on BUY signal',
-      },
-    ],
-    final: { action: 'BUY', confidence: 72, leverage: 3 },
-  },
-  {
-    agents: [
-      {
-        id: 'market_analyst',
-        decision: 'SELL' as const,
-        confidence: 82,
-        reasoning: 'Price at resistance, bearish divergence on 4H',
-      },
-      {
-        id: 'sentiment_agent',
-        decision: 'HOLD' as const,
-        confidence: 55,
-        reasoning: 'Mixed signals, funding rate neutral',
-      },
-      {
-        id: 'risk_manager',
-        decision: 'SELL' as const,
-        confidence: 70,
-        reasoning: 'Downside risk elevated, reduce exposure',
-      },
-      {
-        id: 'coordinator',
-        decision: 'SELL' as const,
-        confidence: 68,
-        reasoning: 'Majority signal: SELL with moderate confidence',
-      },
-    ],
-    final: { action: 'SELL', confidence: 68, leverage: 2 },
-  },
-];
-
 export default function SwarmContent() {
   const { walletAddress, isConnected } = useWalletContext();
   const [agents, setAgents] = useState<Agent[]>(INITIAL_AGENTS);
@@ -166,10 +125,18 @@ export default function SwarmContent() {
     confidence: number;
     leverage: number;
   } | null>(null);
-  const [cycleIndex, setCycleIndex] = useState(0);
+  const [selectedSymbol, setSelectedSymbol] = useState<string>(() => {
+    try {
+      const stored = localStorage.getItem('pacfi_chart_symbol');
+      return stored && MARKET_SYMBOLS.includes(stored as (typeof MARKET_SYMBOLS)[number])
+        ? stored
+        : 'BTC';
+    } catch {
+      return 'BTC';
+    }
+  });
   const [lastRun, setLastRun] = useState<string | null>(null);
   const [marketData, setMarketData] = useState<PacificaMarketData[]>([]);
-  const [selectedSymbol, setSelectedSymbol] = useState<string>('BTC');
   const [autoTradeEnabled, setAutoTradeEnabled] = useState(false);
   const [executionStatus, setExecutionStatus] = useState<
     'idle' | 'executing' | 'success' | 'failed'
@@ -233,6 +200,14 @@ export default function SwarmContent() {
     return () => clearInterval(interval);
   }, []);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem('pacfi_chart_symbol', selectedSymbol);
+    } catch {
+      // ignore browser storage failure
+    }
+  }, [selectedSymbol]);
+
   const getStatusColor = (status: Agent['status']) => {
     if (status === 'analyzing') return '#F59E0B';
     if (status === 'done') return '#10B981';
@@ -247,6 +222,10 @@ export default function SwarmContent() {
 
   const runCycle = async () => {
     if (isRunning) return;
+    if (!isConnected || !walletAddress) {
+      setError('Connect wallet to run real AI swarm analysis.');
+      return;
+    }
 
     setIsRunning(true);
     setFinalDecision(null);
@@ -372,14 +351,14 @@ export default function SwarmContent() {
         ];
 
   return (
-    <div style={{ padding: '24px 28px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: 16 }}>
       {/* Stats row */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14 }}>
+      <div className="swarm-stat-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14 }}>
         {stats.map((s) => (
           <div key={s.label} className="stat-card">
             <div className="stat-label">{s.label}</div>
             <div className="stat-value num">{s.value}</div>
-            <div style={{ fontSize: 11, color: '#9CA3AF', marginTop: 6 }}>{s.sub}</div>
+            <div style={{ fontSize: 11, color: '#64748B', marginTop: 6 }}>{s.sub}</div>
           </div>
         ))}
       </div>
@@ -392,7 +371,7 @@ export default function SwarmContent() {
             {isRunning && (
               <span
                 className="badge"
-                style={{ background: '#FFFBEB', color: '#D97706', fontSize: 10 }}
+                style={{ background: '#FFFBEB', color: '#D97706', fontSize: 10, borderColor: '#FDE68A' }}
               >
                 Running
               </span>
@@ -410,7 +389,7 @@ export default function SwarmContent() {
                 fontWeight: 600,
               }}
             >
-              {AVAILABLE_SYMBOLS.map((s) => (
+              {MARKET_SYMBOLS.map((s) => (
                 <option key={s} value={s}>
                   {s}
                 </option>
@@ -445,7 +424,7 @@ export default function SwarmContent() {
             </button>
           </div>
         </div>
-        <div style={{ height: 'calc(100vh - 320px)', minHeight: 500, position: 'relative' }}>
+        <div style={{ height: 'calc(100vh - 320px)', minHeight: 500, position: 'relative', padding: '0 18px 18px' }}>
           <SwarmVisualization
             agents={agents}
             isRunning={isRunning}
@@ -456,15 +435,15 @@ export default function SwarmContent() {
         {finalDecision && (
           <div
             style={{
-              margin: '0 20px 16px',
-              padding: '12px 16px',
-              background:
-                finalDecision.action === 'BUY'
+            margin: '0 20px 20px',
+            padding: '12px 16px',
+            background:
+              finalDecision.action === 'BUY'
                   ? '#F0FDF4'
                   : finalDecision.action === 'SELL'
                     ? '#FEF2F2'
                     : '#F9FAFB',
-              borderRadius: 8,
+              borderRadius: 14,
               border: `1px solid ${finalDecision.action === 'BUY' ? '#D1FAE5' : finalDecision.action === 'SELL' ? '#FEE2E2' : '#E5E7EB'}`,
               display: 'flex',
               alignItems: 'center',
@@ -476,7 +455,7 @@ export default function SwarmContent() {
                 style={{
                   fontSize: 10,
                   fontWeight: 700,
-                  color: '#9CA3AF',
+                  color: '#64748B',
                   textTransform: 'uppercase',
                   letterSpacing: '0.06em',
                   marginBottom: 4,
@@ -500,7 +479,7 @@ export default function SwarmContent() {
               </div>
             </div>
             <div style={{ textAlign: 'right' }}>
-              <div style={{ fontSize: 10, color: '#9CA3AF', fontWeight: 600, marginBottom: 2 }}>
+              <div style={{ fontSize: 10, color: '#64748B', fontWeight: 600, marginBottom: 2 }}>
                 Leverage
               </div>
               <span className="num" style={{ fontSize: 16, fontWeight: 700, color: '#374151' }}>
@@ -512,9 +491,9 @@ export default function SwarmContent() {
       </div>
 
       {/* Agent Status + Recent Decisions side by side */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+      <div className="swarm-panels-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
         <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-          <div style={{ padding: '16px 20px', borderBottom: '1px solid #F3F4F6' }}>
+          <div style={{ padding: '16px 20px', borderBottom: '1px solid #E2E8F0' }}>
             <span className="card-title">Agent History (Last 7 Cycles)</span>
           </div>
           <div style={{ padding: '16px 20px' }}>
@@ -525,7 +504,7 @@ export default function SwarmContent() {
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  color: '#9CA3AF',
+                  color: '#64748B',
                 }}
               >
                 Connect wallet to view agent history
@@ -547,15 +526,15 @@ export default function SwarmContent() {
             ) : swarmHistory && swarmHistory.agentHistory.length > 0 ? (
               <ResponsiveContainer width="100%" height={200}>
                 <BarChart data={swarmHistory.agentHistory}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" vertical={false} />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" vertical={false} />
                   <XAxis
                     dataKey="cycle"
-                    tick={{ fontSize: 10, fill: '#9CA3AF' }}
+                    tick={{ fontSize: 10, fill: '#64748B' }}
                     tickLine={false}
                     axisLine={false}
                   />
                   <YAxis
-                    tick={{ fontSize: 10, fill: '#9CA3AF' }}
+                    tick={{ fontSize: 10, fill: '#64748B' }}
                     tickLine={false}
                     axisLine={false}
                     domain={[0, 100]}
@@ -564,8 +543,8 @@ export default function SwarmContent() {
                     formatter={(v: number) => `${v}%`}
                     contentStyle={{
                       background: '#FFF',
-                      border: '1px solid #E5E7EB',
-                      borderRadius: 6,
+                      border: '1px solid #DBE4F0',
+                      borderRadius: 12,
                       fontSize: 11,
                     }}
                   />
@@ -587,7 +566,7 @@ export default function SwarmContent() {
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  color: '#9CA3AF',
+                  color: '#64748B',
                 }}
               >
                 No agent history yet
@@ -597,7 +576,7 @@ export default function SwarmContent() {
         </div>
 
         <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-          <div style={{ padding: '12px 20px', borderBottom: '1px solid #F3F4F6' }}>
+          <div style={{ padding: '12px 20px', borderBottom: '1px solid #E2E8F0' }}>
             <span className="card-title">Recent AI Decisions</span>
           </div>
           <table className="data-table">
@@ -616,7 +595,7 @@ export default function SwarmContent() {
                 <tr>
                   <td
                     colSpan={6}
-                    style={{ textAlign: 'center', padding: '20px', color: '#9CA3AF' }}
+                    style={{ textAlign: 'center', padding: '20px', color: '#64748B' }}
                   >
                     Connect wallet to view decisions
                   </td>
@@ -625,7 +604,7 @@ export default function SwarmContent() {
                 <tr>
                   <td
                     colSpan={6}
-                    style={{ textAlign: 'center', padding: '20px', color: '#9CA3AF' }}
+                    style={{ textAlign: 'center', padding: '20px', color: '#64748B' }}
                   >
                     Loading...
                   </td>
@@ -643,7 +622,7 @@ export default function SwarmContent() {
                 swarmHistory.decisions.map((d, i) => (
                   <tr key={i}>
                     <td>
-                      <span style={{ fontSize: 12, color: '#9CA3AF' }}>{d.time}</span>
+                      <span style={{ fontSize: 12, color: '#64748B' }}>{d.time}</span>
                     </td>
                     <td>
                       <span style={{ fontWeight: 600, color: '#111827' }}>{d.symbol}</span>
@@ -699,7 +678,7 @@ export default function SwarmContent() {
                 <tr>
                   <td
                     colSpan={6}
-                    style={{ textAlign: 'center', padding: '20px', color: '#9CA3AF' }}
+                    style={{ textAlign: 'center', padding: '20px', color: '#64748B' }}
                   >
                     No decisions yet
                   </td>
@@ -709,6 +688,24 @@ export default function SwarmContent() {
           </table>
         </div>
       </div>
+
+      <style>{`
+        @media (max-width: 1180px) {
+          .swarm-stat-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+          }
+
+          .swarm-panels-grid {
+            grid-template-columns: 1fr !important;
+          }
+        }
+
+        @media (max-width: 720px) {
+          .swarm-stat-grid {
+            grid-template-columns: 1fr !important;
+          }
+        }
+      `}</style>
     </div>
   );
 }
