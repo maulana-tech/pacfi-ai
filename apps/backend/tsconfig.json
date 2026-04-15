@@ -4,8 +4,9 @@
     "outDir": "./dist",
     "lib": ["ES2020"],
     "target": "ES2020",
-    "rootDir": "../../",
-    "noEmit": true,
+    "rootDir": "./src",
+    "noEmit": false,
+    "declaration": false,
     "allowImportingTsExtensions": false
   },
   "include": ["src"]
