@@ -7,6 +7,11 @@
     "rootDir": "./src",
     "noEmit": false,
     "declaration": false,
+    "module": "ES2020",
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "noEmit": false,
     "allowImportingTsExtensions": false
   },
   "include": ["src"]
