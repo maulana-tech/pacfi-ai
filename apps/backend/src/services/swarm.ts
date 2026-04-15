@@ -1,5 +1,7 @@
 import { SwarmDecision, MarketData } from '../types';
 
+const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'nvidia/nemotron-3-super-120b-a12b:free';
+
 interface AgentResponse {
   signal?: 'BUY' | 'SELL' | 'HOLD';
   action?: 'BUY' | 'SELL' | 'HOLD';
@@ -47,8 +49,10 @@ export class QwenAgent {
   private systemPrompt: string;
   private provider: ModelProvider;
   private baseModel: string;
+  private agentName: string;
 
   constructor(role: string, prompt: string, model: string = 'qwen-max') {
+    this.agentName = role;
     this.provider = getProvider();
     this.apiKey =
       process.env.OPENROUTER_API_KEY ||
@@ -86,8 +90,7 @@ export class QwenAgent {
 
   async analyze(context: string): Promise<AgentResponse> {
     if (!this.apiKey) {
-      console.warn('[Agent] No API key configured, returning mock response');
-      return this.getMockResponse();
+      throw new Error(`[${this.agentName}] OPENROUTER_API_KEY is not configured`);
     }
 
     try {
@@ -282,8 +285,15 @@ export class SwarmCoordinator {
         stopLossPct: riskParams.stopLossPct,
       };
     } catch (error) {
-      console.error('[SwarmCoordinator] Error executing cycle:', error);
-      return { action: 'HOLD', confidence: 0, reasoning: 'Error in swarm analysis' };
+      console.error('[SwarmCoordinator] Error in detailed cycle:', error);
+      throw error instanceof Error ? error : new Error('Error in swarm analysis cycle');
     }
+  }
+
+  private resolveDecision(resp: AgentResponse): 'BUY' | 'SELL' | 'HOLD' {
+    const raw = (resp.action || resp.signal || 'HOLD').toString().toUpperCase();
+    if (raw === 'BUY') return 'BUY';
+    if (raw === 'SELL') return 'SELL';
+    return 'HOLD';
   }
 }
