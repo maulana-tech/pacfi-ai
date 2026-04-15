@@ -117,6 +117,7 @@ router.post('/create-market', async (c) => {
 
     const body = await c.req.json();
     const { symbol, side, amount, builderCode, clientOrderId } = body;
+    const leverage = typeof body.leverage === 'number' ? body.leverage : undefined;
 
     if (!symbol || !side || !amount) {
       return c.json(errorEnvelope('Missing required fields'), 400);
@@ -143,7 +144,8 @@ router.post('/create-market', async (c) => {
       auth.timestamp,
       auth.agentWallet,
       typeof clientOrderId === 'string' ? clientOrderId : undefined,
-      builderCode
+      builderCode,
+      leverage
     );
 
     const userId = await ensureUser(wallet.walletAddress);
@@ -175,6 +177,7 @@ router.post('/create-limit', async (c) => {
 
     const body = await c.req.json();
     const { symbol, side, amount, price, builderCode, clientOrderId } = body;
+    const leverage = typeof body.leverage === 'number' ? body.leverage : undefined;
 
     if (!symbol || !side || !amount || !price) {
       return c.json(errorEnvelope('Missing required fields'), 400);
@@ -202,7 +205,8 @@ router.post('/create-limit', async (c) => {
       auth.timestamp,
       auth.agentWallet,
       typeof clientOrderId === 'string' ? clientOrderId : undefined,
-      builderCode
+      builderCode,
+      leverage
     );
 
     const userId = await ensureUser(wallet.walletAddress);
@@ -266,7 +270,10 @@ router.get('/balance', async (c) => {
 router.get('/market-data', async (c) => {
   const symbolsParam = c.req.query('symbols');
   const requestedSymbols = symbolsParam
-    ? symbolsParam.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean)
+    ? symbolsParam
+        .split(',')
+        .map((s) => s.trim().toUpperCase())
+        .filter(Boolean)
     : ['BTC', 'ETH', 'SOL'];
 
   const fmtVol = (v: number): string => {
@@ -327,9 +334,15 @@ router.get('/market-data', async (c) => {
       let high = price;
       let low = price;
       let volume = '$0';
-      if (tradesResult.status === 'fulfilled' && Array.isArray(tradesResult.value) && tradesResult.value.length > 0) {
+      if (
+        tradesResult.status === 'fulfilled' &&
+        Array.isArray(tradesResult.value) &&
+        tradesResult.value.length > 0
+      ) {
         const trs = tradesResult.value;
-        const prices = trs.map((t) => Number.parseFloat(t.price)).filter((p) => Number.isFinite(p) && p > 0);
+        const prices = trs
+          .map((t) => Number.parseFloat(t.price))
+          .filter((p) => Number.isFinite(p) && p > 0);
         if (prices.length > 0) {
           if (price === 0) price = prices[0];
           high = Math.max(...prices);
@@ -379,13 +392,80 @@ router.get('/market-data', async (c) => {
  * Transforms Pacifica candle data to lightweight-charts format
  */
 router.get('/candles', async (c) => {
-  const symbol   = (c.req.query('symbol') ?? 'BTC').toUpperCase();
+  const symbol = (c.req.query('symbol') ?? 'BTC').toUpperCase();
   const interval = c.req.query('interval') ?? '1h';
-  const limit    = Math.min(500, Math.max(10, Number.parseInt(c.req.query('limit') ?? '100', 10)));
+  const limit = Math.min(500, Math.max(10, Number.parseInt(c.req.query('limit') ?? '100', 10)));
+  const symbolCandidates = Array.from(new Set([symbol, `${symbol}-USDC`]));
+
+  const buildFromTrades = async () => {
+    const tradesResults = await Promise.allSettled(
+      symbolCandidates.map((s) => pacificaClient.getRecentTrades(s))
+    );
+    const trades = tradesResults
+      .filter((r): r is PromiseFulfilledResult<any[]> => r.status === 'fulfilled')
+      .flatMap((r) => r.value)
+      .sort((a, b) => a.createdAt - b.createdAt);
+    const intervalMs: Record<string, number> = {
+      '1m': 60_000,
+      '5m': 300_000,
+      '15m': 900_000,
+      '1h': 3_600_000,
+      '4h': 14_400_000,
+      '1d': 86_400_000,
+    };
+    const bucketMs = intervalMs[interval] ?? 3_600_000;
+    const buckets = new Map<
+      number,
+      { open: number; high: number; low: number; close: number; volume: number }
+    >();
+
+    for (const t of trades) {
+      const price = Number.parseFloat(t.price);
+      const amount = Number.parseFloat(t.amount);
+      if (!Number.isFinite(price) || price <= 0) {
+        continue;
+      }
+
+      const bucket = Math.floor(t.createdAt / bucketMs) * bucketMs;
+      const existing = buckets.get(bucket);
+
+      if (!existing) {
+        buckets.set(bucket, {
+          open: price,
+          high: price,
+          low: price,
+          close: price,
+          volume: Number.isFinite(amount) ? amount : 0,
+        });
+      } else {
+        existing.high = Math.max(existing.high, price);
+        existing.low = Math.min(existing.low, price);
+        existing.close = price;
+        if (Number.isFinite(amount)) {
+          existing.volume += amount;
+        }
+      }
+    }
+
+    return Array.from(buckets.entries())
+      .map(([t, v]) => ({ time: Math.floor(t / 1000), ...v }))
+      .sort((a, b) => a.time - b.time)
+      .slice(-limit);
+  };
 
   try {
-    const raw = await pacificaClient.getCandleData(symbol, interval, limit);
-    const candles = Array.isArray(raw) ? raw : [];
+    let candles: any[] = [];
+    for (const s of symbolCandidates) {
+      try {
+        const raw = await pacificaClient.getCandleData(s, interval, limit);
+        const next = Array.isArray(raw) ? raw : [];
+        if (next.length > candles.length) {
+          candles = next;
+        }
+      } catch {
+        // Try next symbol variant.
+      }
+    }
 
     const normalizeToUnixSeconds = (value: unknown): number => {
       const numeric =
@@ -407,9 +487,9 @@ router.get('/candles', async (c) => {
     const normalized = candles
       .map((c: any) => {
         const time = normalizeToUnixSeconds(c.t ?? c.time ?? c.ts);
-        const open  = Number.parseFloat(c.o ?? c.open  ?? '0');
-        const high  = Number.parseFloat(c.h ?? c.high  ?? '0');
-        const low   = Number.parseFloat(c.l ?? c.low   ?? '0');
+        const open = Number.parseFloat(c.o ?? c.open ?? '0');
+        const high = Number.parseFloat(c.h ?? c.high ?? '0');
+        const low = Number.parseFloat(c.l ?? c.low ?? '0');
         const close = Number.parseFloat(c.c ?? c.close ?? '0');
         const volume = Number.parseFloat(c.v ?? c.volume ?? '0');
         return { time, open, high, low, close, volume };
@@ -417,40 +497,18 @@ router.get('/candles', async (c) => {
       .filter((c) => c.time > 0 && c.open > 0)
       .sort((a, b) => a.time - b.time);
 
-    return c.json({ success: true, data: normalized });
+    if (normalized.length >= 2) {
+      return c.json({ success: true, data: normalized });
+    }
+
+    const fromTrades = await buildFromTrades();
+    return c.json({ success: true, data: fromTrades });
   } catch (error) {
     console.warn('[Orders] /candles failed, building from trades:', error);
 
     // Fallback: build pseudo-candles from recent trades
     try {
-      const trades = await pacificaClient.getRecentTrades(symbol);
-      const intervalMs: Record<string, number> = {
-        '1m': 60_000, '5m': 300_000, '15m': 900_000,
-        '1h': 3_600_000, '4h': 14_400_000, '1d': 86_400_000,
-      };
-      const bucketMs  = intervalMs[interval] ?? 3_600_000;
-      const buckets   = new Map<number, { open: number; high: number; low: number; close: number; volume: number }>();
-
-      for (const t of trades) {
-        const price  = Number.parseFloat(t.price);
-        const amount = Number.parseFloat(t.amount);
-        if (!Number.isFinite(price) || price <= 0) continue;
-        const bucket = Math.floor(t.createdAt / bucketMs) * bucketMs;
-        const existing = buckets.get(bucket);
-        if (!existing) {
-          buckets.set(bucket, { open: price, high: price, low: price, close: price, volume: amount });
-        } else {
-          existing.high   = Math.max(existing.high, price);
-          existing.low    = Math.min(existing.low, price);
-          existing.close  = price;
-          existing.volume += amount;
-        }
-      }
-
-      const candles = Array.from(buckets.entries())
-        .map(([t, v]) => ({ time: Math.floor(t / 1000), ...v }))
-        .sort((a, b) => a.time - b.time)
-        .slice(-limit);
+      const candles = await buildFromTrades();
 
       return c.json({ success: true, data: candles });
     } catch {
