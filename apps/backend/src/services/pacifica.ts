@@ -22,24 +22,126 @@ export interface PacificaLeaderboardEntry {
  * Mainnet: https://api.pacifica.fi/api/v1
  */
 export class PacificaClient {
-  private baseUrl = 'https://test-api.pacifica.fi/api/v1';
+  private baseUrl: string;
+  private marketInfoCache: {
+    data: any[];
+    expiresAt: number;
+  } | null = null;
+  private readonly marketInfoTtlMs = 60_000;
 
   constructor() {
-    // No API key needed - signing is done by wallet
+    // Default to Pacifica testnet unless explicitly overridden.
+    this.baseUrl = (process.env.PACIFICA_BASE_URL || 'https://test-api.pacifica.fi/api/v1').replace(
+      /\/$/,
+      ''
+    );
+  }
+
+  private static normalizeSymbolInput(symbol: string): string {
+    return symbol
+      .trim()
+      .toUpperCase()
+      .replace('/USDC', '')
+      .replace('/USD', '')
+      .replace('-USDC', '')
+      .replace('-USD', '');
+  }
+
+  private async getMarketInfoCached(forceRefresh = false): Promise<any[]> {
+    if (!forceRefresh && this.marketInfoCache && this.marketInfoCache.expiresAt > Date.now()) {
+      return this.marketInfoCache.data;
+    }
+
+    const data = await this.request<any[]>('/info');
+    const normalized = Array.isArray(data) ? data : [];
+    this.marketInfoCache = {
+      data: normalized,
+      expiresAt: Date.now() + this.marketInfoTtlMs,
+    };
+    return normalized;
+  }
+
+  async resolveSymbol(symbol: string): Promise<string> {
+    const base = PacificaClient.normalizeSymbolInput(symbol);
+    const requested = symbol.trim().toUpperCase();
+    const candidates = Array.from(new Set([requested, `${base}-USDC`, `${base}-USD`, base]));
+
+    try {
+      const info = await this.getMarketInfoCached();
+      if (!info.length) {
+        return candidates[0];
+      }
+
+      const exact = new Map(
+        info
+          .filter((item) => item?.symbol)
+          .map((item) => [String(item.symbol).toUpperCase(), String(item.symbol)])
+      );
+
+      for (const candidate of candidates) {
+        const found = exact.get(candidate);
+        if (found) return found;
+      }
+
+      const prefixed = info.find((item) =>
+        String(item?.symbol ?? '')
+          .toUpperCase()
+          .startsWith(`${base}-`)
+      );
+      if (prefixed?.symbol) {
+        return String(prefixed.symbol);
+      }
+    } catch {
+      // Fallback to raw candidate if /info is temporarily unavailable.
+    }
+
+    return candidates[0];
+  }
+
+  private async requestWithSymbolFallback<T>(
+    symbol: string,
+    buildPath: (resolvedSymbol: string) => string
+  ): Promise<T> {
+    const base = PacificaClient.normalizeSymbolInput(symbol);
+    const resolved = await this.resolveSymbol(symbol);
+    const candidates = Array.from(
+      new Set([resolved, symbol.trim().toUpperCase(), `${base}-USDC`, base])
+    );
+
+    let lastError: unknown;
+    for (const candidate of candidates) {
+      try {
+        return await this.request<T>(buildPath(candidate));
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    throw lastError instanceof Error
+      ? lastError
+      : new Error('Failed to fetch Pacifica symbol data');
   }
 
   private async request<T>(path: string, init?: RequestInit): Promise<T> {
     const response = await fetch(`${this.baseUrl}${path}`, init);
 
     if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Pacifica API error: ${response.status} ${response.statusText} - ${error}`);
+      let errText: string;
+      try {
+        const errJson = (await response.json()) as any;
+        // Pacifica errors may be { error: "...", message: "..." } or { detail: "..." }
+        errText = errJson?.error ?? errJson?.message ?? errJson?.detail ?? JSON.stringify(errJson);
+      } catch {
+        errText = await response.text().catch(() => response.statusText);
+      }
+      throw new Error(`Pacifica ${response.status}: ${errText}`);
     }
 
     const json: any = await response.json();
 
     if (json.success === false) {
-      throw new Error(`Pacifica API error: ${json.error || 'Unknown error'}`);
+      const msg = json.error ?? json.message ?? json.detail ?? 'Unknown error';
+      throw new Error(`Pacifica error: ${typeof msg === 'string' ? msg : JSON.stringify(msg)}`);
     }
 
     return json.data ?? json;
@@ -65,7 +167,7 @@ export class PacificaClient {
    */
   async getMarketInfo(): Promise<any> {
     try {
-      return await this.request('/info');
+      return await this.getMarketInfoCached();
     } catch (error) {
       console.error('[PacificaClient] Error fetching market info:', error);
       throw error;
@@ -85,7 +187,11 @@ export class PacificaClient {
     timestamp: number;
   }> {
     try {
-      const data = await this.request<any>(`/book?symbol=${symbol}&agg_level=${aggLevel}`);
+      const data = await this.requestWithSymbolFallback<any>(
+        symbol,
+        (resolvedSymbol) =>
+          `/book?symbol=${encodeURIComponent(resolvedSymbol)}&agg_level=${aggLevel}`
+      );
       return {
         symbol: data.s,
         bids:
@@ -122,7 +228,10 @@ export class PacificaClient {
     }>
   > {
     try {
-      const data = await this.request<any[]>(`/trades?symbol=${symbol}`);
+      const data = await this.requestWithSymbolFallback<any[]>(
+        symbol,
+        (resolvedSymbol) => `/trades?symbol=${encodeURIComponent(resolvedSymbol)}`
+      );
       return data.map((t) => ({
         eventType: t.event_type,
         price: t.price,
@@ -142,7 +251,11 @@ export class PacificaClient {
    */
   async getCandleData(symbol: string, interval: string = '1m', limit: number = 100): Promise<any> {
     try {
-      return await this.request(`/candles?symbol=${symbol}&interval=${interval}&limit=${limit}`);
+      return await this.requestWithSymbolFallback<any>(
+        symbol,
+        (resolvedSymbol) =>
+          `/candles?symbol=${encodeURIComponent(resolvedSymbol)}&interval=${encodeURIComponent(interval)}&limit=${limit}`
+      );
     } catch (error) {
       console.error('[PacificaClient] Error fetching candle data:', error);
       throw error;
@@ -154,7 +267,10 @@ export class PacificaClient {
    */
   async getFundingHistory(symbol: string): Promise<any> {
     try {
-      return await this.request(`/markets/funding?symbol=${symbol}`);
+      return await this.requestWithSymbolFallback<any>(
+        symbol,
+        (resolvedSymbol) => `/markets/funding?symbol=${encodeURIComponent(resolvedSymbol)}`
+      );
     } catch (error) {
       console.error('[PacificaClient] Error fetching funding history:', error);
       throw error;
@@ -174,15 +290,17 @@ export class PacificaClient {
     timestamp: number,
     agentWallet?: string,
     clientOrderId?: string,
-    builderCode?: string
+    builderCode?: string,
+    leverage?: number
   ): Promise<any> {
-    const body = {
+    const resolvedSymbol = await this.resolveSymbol(symbol);
+    const body: Record<string, unknown> = {
       account: walletAddress,
       agent_wallet: agentWallet ?? null,
       signature,
       timestamp,
       expiry_window: 30000,
-      symbol,
+      symbol: resolvedSymbol,
       side,
       amount,
       slippage_percent: '0.5',
@@ -190,6 +308,9 @@ export class PacificaClient {
       client_order_id: clientOrderId,
       builder_code: builderCode,
     };
+    if (leverage && leverage > 0) {
+      body.leverage = leverage;
+    }
 
     try {
       return await this.request('/orders/create_market', {
@@ -219,15 +340,17 @@ export class PacificaClient {
     timestamp: number,
     agentWallet?: string,
     clientOrderId?: string,
-    builderCode?: string
+    builderCode?: string,
+    leverage?: number
   ): Promise<any> {
-    const body = {
+    const resolvedSymbol = await this.resolveSymbol(symbol);
+    const body: Record<string, unknown> = {
       account: walletAddress,
       agent_wallet: agentWallet ?? null,
       signature,
       timestamp,
       expiry_window: 30000,
-      symbol,
+      symbol: resolvedSymbol,
       side,
       amount,
       price,
@@ -236,6 +359,9 @@ export class PacificaClient {
       client_order_id: clientOrderId,
       builder_code: builderCode,
     };
+    if (leverage && leverage > 0) {
+      body.leverage = leverage;
+    }
 
     try {
       return await this.request('/orders/create', {
@@ -256,10 +382,13 @@ export class PacificaClient {
    */
   async getMarketData(symbol: string): Promise<MarketData> {
     try {
-      const data = await this.request<Record<string, string>>(`/markets/${symbol}`);
+      const resolvedSymbol = await this.resolveSymbol(symbol);
+      const data = await this.request<Record<string, string>>(
+        `/markets/${encodeURIComponent(resolvedSymbol)}`
+      );
 
       return {
-        symbol,
+        symbol: resolvedSymbol,
         price: parseFloat(data.price),
         volume24h: parseFloat(data.volume24h),
         fundingRate: parseFloat(data.fundingRate),
