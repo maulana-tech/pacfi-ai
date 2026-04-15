@@ -40,32 +40,6 @@ const navItems = [
     ),
   },
   {
-    id: 'builder',
-    href: '/builder',
-    icon: (
-      <svg width="20" height="20" viewBox="0 0 16 16" fill="none">
-        <path
-          d="M3 8.5L8 2l5 6.5v4A1.5 1.5 0 0 1 11.5 14h-7A1.5 1.5 0 0 1 3 12.5v-4Z"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          strokeLinejoin="round"
-        />
-        <path
-          d="M6.25 8.25h3.5"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-        />
-        <path
-          d="M8 6.5v3.5"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-        />
-      </svg>
-    ),
-  },
-  {
     id: 'portfolio',
     href: '/portfolio',
     icon: (
@@ -123,28 +97,28 @@ export default function Sidebar({ activeNav = 'dashboard' }: SidebarProps) {
   return (
     <aside
       style={{
-        width: 100,
-        minWidth: 100,
+        width: 96,
+        minWidth: 96,
         height: '100vh',
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
-        background: '#F8FAFC',
-        padding: '24px 0',
+        background: 'transparent',
+        padding: '16px 12px',
+        gap: 12,
       }}
     >
-      {/* Logo */}
+      {/* Logo — floating card */}
       <div
         style={{
           width: 52,
           height: 52,
           background: 'linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%)',
-          borderRadius: 14,
+          borderRadius: 16,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          boxShadow: '0 4px 12px rgba(37, 99, 235, 0.3)',
-          marginBottom: 24,
+          boxShadow: '0 8px 24px rgba(37, 99, 235, 0.28)',
           flexShrink: 0,
         }}
       >
@@ -160,7 +134,7 @@ export default function Sidebar({ activeNav = 'dashboard' }: SidebarProps) {
         </svg>
       </div>
 
-      {/* Menu Container - Height auto, tidak panjang */}
+      {/* Nav — floating pill card */}
       <nav
         style={{
           flex: 1,
@@ -176,12 +150,13 @@ export default function Sidebar({ activeNav = 'dashboard' }: SidebarProps) {
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
-            background: '#FFFFFF',
-            borderRadius: 16,
-            padding: 12,
+            background: 'rgba(255, 255, 255, 0.90)',
+            borderRadius: 24,
+            padding: '10px 8px',
             gap: 6,
-            boxShadow: '0 4px 20px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.04)',
-            border: '1px solid rgba(0, 0, 0, 0.05)',
+            boxShadow: '0 8px 32px rgba(15, 23, 42, 0.10), 0 1px 2px rgba(15,23,42,0.04)',
+            border: '1px solid rgba(219, 228, 240, 0.8)',
+            backdropFilter: 'blur(12px)',
           }}
         >
           {navItems.map((item) => {
@@ -196,17 +171,18 @@ export default function Sidebar({ activeNav = 'dashboard' }: SidebarProps) {
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  width: 44,
-                  height: 44,
-                  borderRadius: 12,
+                  width: 46,
+                  height: 46,
+                  borderRadius: 16,
                   textDecoration: 'none',
                   transition: 'all 0.15s ease',
                   background: isActive
                     ? 'linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%)'
                     : 'transparent',
-                  color: isActive ? '#FFFFFF' : '#6B7280',
-                  boxShadow: isActive ? '0 4px 12px rgba(37, 99, 235, 0.3)' : 'none',
+                  color: isActive ? '#FFFFFF' : '#64748B',
+                  boxShadow: isActive ? '0 6px 18px rgba(37, 99, 235, 0.22)' : 'none',
                 }}
+                aria-current={isActive ? 'page' : undefined}
               >
                 {item.icon}
               </a>
