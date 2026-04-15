@@ -2,28 +2,17 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-# Install pnpm
-RUN corepack enable && corepack prepare pnpm@8 --activate
+# Copy all source files first
+COPY . .
 
-# Copy workspace files
-COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
-
-# Copy app/package files
-COPY apps/backend/package.json ./apps/backend/
-COPY apps/frontend/package.json ./apps/frontend/
-COPY packages/*/package.json ./packages/
-
-# Install dependencies (workspace)
-RUN pnpm install --frozen-lockfile
-
-# Copy source code
-COPY apps ./apps
-COPY packages ./packages
+# Install pnpm and dependencies
+RUN corepack enable && corepack prepare pnpm@9 --activate && \
+    pnpm install --no-frozen-lockfile
 
 # Build
 RUN pnpm run build
 
-# Expose ports
+# Expose port
 EXPOSE 3001
 
 # Start backend
