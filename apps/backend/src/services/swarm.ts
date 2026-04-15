@@ -13,16 +13,74 @@ interface AgentResponse {
   stopLossPct?: number;
 }
 
+type ModelProvider = 'openrouter' | 'glm' | 'dashscope' | 'none';
+
+const getProvider = (): ModelProvider => {
+  if (process.env.OPENROUTER_API_KEY) return 'openrouter';
+  if (process.env.GLM_API_KEY) return 'glm';
+  if (process.env.DASHSCOPE_API_KEY) return 'dashscope';
+  return 'none';
+};
+
+const MODEL_MAPPING: Record<Exclude<ModelProvider, 'none'>, Record<string, string>> = {
+  openrouter: {
+    deep: 'openrouter/free',
+    quick: 'openrouter/free',
+    'qwen-deep': 'qwen/qwen2.5-72b-instruct',
+    'qwen-quick': 'qwen/qwen2.5-7b-instruct',
+    'glm-deep': 'deepseek/deepseek-chat',
+    'glm-quick': 'deepseek/deepseek-chat',
+  },
+  glm: {
+    deep: 'glm-4-flash',
+    quick: 'glm-4-flash',
+  },
+  dashscope: {
+    deep: 'qwen-max',
+    quick: 'qwen-turbo',
+  },
+};
+
 export class QwenAgent {
   private apiKey: string;
-  private model: string;
+  private modelType: 'deep' | 'quick';
   private systemPrompt: string;
-  private useOpenRouter: boolean;
+  private provider: ModelProvider;
+  private baseModel: string;
 
   constructor(role: string, prompt: string, model: string = 'qwen-max') {
-    this.useOpenRouter = !!process.env.OPENROUTER_API_KEY;
-    this.apiKey = process.env.OPENROUTER_API_KEY || process.env.DASHSCOPE_API_KEY || '';
-    this.model = model;
+    this.provider = getProvider();
+    this.apiKey =
+      process.env.OPENROUTER_API_KEY ||
+      process.env.GLM_API_KEY ||
+      process.env.DASHSCOPE_API_KEY ||
+      '';
+
+    if (model === 'qwen-max' || model === 'glm-4-plus' || model === 'deep') {
+      this.modelType = 'deep';
+    } else {
+      this.modelType = 'quick';
+    }
+
+    if (this.provider === 'openrouter') {
+      if (model.includes('glm')) {
+        this.baseModel =
+          MODEL_MAPPING.openrouter[`glm-${this.modelType}`] || MODEL_MAPPING.openrouter['glm-deep'];
+      } else if (model.includes('qwen')) {
+        this.baseModel =
+          MODEL_MAPPING.openrouter[`qwen-${this.modelType}`] ||
+          MODEL_MAPPING.openrouter['qwen-deep'];
+      } else {
+        this.baseModel = MODEL_MAPPING.openrouter[this.modelType];
+      }
+    } else if (this.provider === 'glm') {
+      this.baseModel = MODEL_MAPPING.glm[this.modelType];
+    } else if (this.provider === 'dashscope') {
+      this.baseModel = MODEL_MAPPING.dashscope[this.modelType];
+    } else {
+      this.baseModel = 'nvidia/nemotron-3-nano-30b-a3b:free';
+    }
+
     this.systemPrompt = prompt;
   }
 
@@ -35,61 +93,27 @@ export class QwenAgent {
     try {
       let response: Response;
 
-      if (this.useOpenRouter) {
-        const openRouterModel =
-          this.model === 'qwen-max' ? 'qwen/qwen2.5-72b-instruct' : 'qwen/qwen2.5-7b-instruct';
-
-        response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${this.apiKey}`,
-            'Content-Type': 'application/json',
-            'HTTP-Referer': 'https://pacfi.ai',
-            'X-Title': 'Pacfi AI',
-          },
-          body: JSON.stringify({
-            model: openRouterModel,
-            messages: [
-              { role: 'system', content: this.systemPrompt },
-              { role: 'user', content: context },
-            ],
-            temperature: 0.7,
-            max_tokens: 1024,
-          }),
-        });
+      if (this.provider === 'openrouter') {
+        response = await this.callOpenRouter(context);
+      } else if (this.provider === 'glm') {
+        response = await this.callGLM(context);
+      } else if (this.provider === 'dashscope') {
+        response = await this.callDashScope(context);
       } else {
-        response = await fetch(
-          'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation',
-          {
-            method: 'POST',
-            headers: {
-              Authorization: `Bearer ${this.apiKey}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              model: this.model,
-              messages: [
-                { role: 'system', content: this.systemPrompt },
-                { role: 'user', content: context },
-              ],
-              temperature: 0.7,
-              max_tokens: 1024,
-            }),
-          }
-        );
+        return this.getMockResponse();
       }
 
       if (!response.ok) {
         const errorData = (await response.json().catch(() => ({}))) as Record<string, any>;
-        const errorMsg = this.useOpenRouter ? errorData.error?.message : errorData.message;
-        console.warn('[Agent] API error:', errorMsg || response.statusText);
+        const errorMsg = errorData.error?.message || errorData.message || response.statusText;
+        console.warn('[Agent] API error:', errorMsg);
         return this.getMockResponse();
       }
 
       const data = (await response.json()) as any;
-
       let content: string | undefined;
-      if (this.useOpenRouter) {
+
+      if (this.provider === 'openrouter' || this.provider === 'glm') {
         content = data.choices?.[0]?.message?.content;
       } else {
         content = data.output?.choices?.[0]?.message?.content;
@@ -109,6 +133,65 @@ export class QwenAgent {
       console.warn('[Agent] Error analyzing, using mock:', error);
       return this.getMockResponse();
     }
+  }
+
+  private async callOpenRouter(context: string): Promise<Response> {
+    return fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.apiKey}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://pacfi.ai',
+        'X-Title': 'Pacfi AI',
+      },
+      body: JSON.stringify({
+        model: this.baseModel,
+        messages: [
+          { role: 'system', content: this.systemPrompt },
+          { role: 'user', content: context },
+        ],
+        temperature: 0.7,
+        max_tokens: 1024,
+      }),
+    });
+  }
+
+  private async callGLM(context: string): Promise<Response> {
+    return fetch('https://open.bigmodel.cn/api/paas/v4/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: this.baseModel,
+        messages: [
+          { role: 'system', content: this.systemPrompt },
+          { role: 'user', content: context },
+        ],
+        temperature: 0.7,
+        max_tokens: 1024,
+      }),
+    });
+  }
+
+  private async callDashScope(context: string): Promise<Response> {
+    return fetch('https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: this.baseModel,
+        messages: [
+          { role: 'system', content: this.systemPrompt },
+          { role: 'user', content: context },
+        ],
+        temperature: 0.7,
+        max_tokens: 1024,
+      }),
+    });
   }
 
   private getMockResponse(): AgentResponse {
@@ -139,7 +222,8 @@ export class SwarmCoordinator {
        - signal: "BUY", "SELL", or "HOLD"
        - confidence: 0-100 (confidence level)
        - reason: brief explanation of your analysis
-       Only return valid JSON, no other text.`
+       Only return valid JSON, no other text.`,
+      'deep'
     );
 
     this.sentimentAgent = new QwenAgent(
@@ -149,7 +233,8 @@ export class SwarmCoordinator {
        - sentiment: "BULLISH", "BEARISH", or "NEUTRAL"
        - strength: 0-100 (sentiment strength)
        - reason: brief explanation
-       Only return valid JSON, no other text.`
+       Only return valid JSON, no other text.`,
+      'quick'
     );
 
     this.riskManager = new QwenAgent(
@@ -159,7 +244,8 @@ export class SwarmCoordinator {
        - positionSize: recommended position size in USD
        - leverage: recommended leverage (1-50x)
        - stopLossPct: stop loss percentage (1-10%)
-       Only return valid JSON, no other text.`
+       Only return valid JSON, no other text.`,
+      'quick'
     );
 
     this.coordinator = new QwenAgent(
@@ -169,7 +255,8 @@ export class SwarmCoordinator {
        - action: "BUY", "SELL", or "HOLD"
        - confidence: 0-100
        - reasoning: explanation of final decision
-       Only return valid JSON, no other text.`
+       Only return valid JSON, no other text.`,
+      'deep'
     );
   }
 

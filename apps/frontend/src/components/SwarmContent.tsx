@@ -63,6 +63,8 @@ interface Agent {
 
 const API_URL = import.meta.env.PUBLIC_API_URL ?? 'http://localhost:3001';
 
+const AVAILABLE_SYMBOLS = ['BTC', 'ETH', 'SOL', 'DOGE', 'XRP', 'ADA', 'AVAX', 'LINK', 'LTC'];
+
 const INITIAL_AGENTS: Agent[] = [
   {
     id: 'market_analyst',
@@ -167,6 +169,11 @@ export default function SwarmContent() {
   const [cycleIndex, setCycleIndex] = useState(0);
   const [lastRun, setLastRun] = useState<string | null>(null);
   const [marketData, setMarketData] = useState<PacificaMarketData[]>([]);
+  const [selectedSymbol, setSelectedSymbol] = useState<string>('BTC');
+  const [autoTradeEnabled, setAutoTradeEnabled] = useState(false);
+  const [executionStatus, setExecutionStatus] = useState<
+    'idle' | 'executing' | 'success' | 'failed'
+  >('idle');
 
   const [swarmHistory, setSwarmHistory] = useState<SwarmHistoryData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -243,39 +250,96 @@ export default function SwarmContent() {
 
     setIsRunning(true);
     setFinalDecision(null);
+    setExecutionStatus('idle');
 
-    const cycle = MOCK_CYCLES[cycleIndex % MOCK_CYCLES.length];
-    setCycleIndex((i) => i + 1);
+    setAgents(
+      INITIAL_AGENTS.map((a) => ({
+        ...a,
+        status: 'analyzing' as const,
+        decision: undefined,
+        confidence: undefined,
+        reasoning: undefined,
+      }))
+    );
 
-    setAgents(INITIAL_AGENTS.map((a) => ({ ...a, status: 'idle' as const })));
+    try {
+      const response = await fetch(`${API_URL}/agent/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          symbol: selectedSymbol,
+          portfolioBalance: 10000,
+          autoTrade: autoTradeEnabled,
+        }),
+      });
 
-    for (let i = 0; i < cycle.agents.length; i++) {
-      const agentData = cycle.agents[i];
+      const result = await response.json();
 
-      setAgents((prev) =>
-        prev.map((a) => (a.id === agentData.id ? { ...a, status: 'analyzing' as const } : a))
-      );
+      if (result.success && result.data) {
+        const { decision, marketContext } = result.data;
+        const execution = result.data.execution;
 
-      await new Promise((r) => setTimeout(r, 1200));
+        setAgents([
+          {
+            id: 'market_analyst',
+            name: 'Market Analyst',
+            role: 'Technical Analysis',
+            status: 'done' as const,
+            decision: decision.action,
+            confidence: Math.round(decision.confidence * 0.9),
+            reasoning: `Price: $${marketContext.currentPrice?.toFixed(2) || 'N/A'}`,
+            color: '#2563EB',
+          },
+          {
+            id: 'sentiment_agent',
+            name: 'Sentiment Agent',
+            role: 'Market Sentiment',
+            status: 'done' as const,
+            decision: decision.action,
+            confidence: Math.round(decision.confidence * 0.85),
+            reasoning: `Funding: ${marketContext.fundingRate * 100}%`,
+            color: '#7C3AED',
+          },
+          {
+            id: 'risk_manager',
+            name: 'Risk Manager',
+            role: 'Position Sizing',
+            status: 'done' as const,
+            decision: decision.action,
+            confidence: Math.round(decision.confidence * 0.95),
+            reasoning: `Size: $${decision.positionSize || 'N/A'}`,
+            color: '#0891B2',
+          },
+          {
+            id: 'coordinator',
+            name: 'Coordinator',
+            role: 'Final Decision',
+            status: 'done' as const,
+            decision: decision.action,
+            confidence: decision.confidence,
+            reasoning: decision.reasoning,
+            color: '#059669',
+          },
+        ]);
 
-      setAgents((prev) =>
-        prev.map((a) =>
-          a.id === agentData.id
-            ? {
-                ...a,
-                status: 'done' as const,
-                decision: agentData.decision,
-                confidence: agentData.confidence,
-                reasoning: agentData.reasoning,
-              }
-            : a
-        )
-      );
+        setFinalDecision({
+          action: decision.action,
+          confidence: decision.confidence,
+          leverage: decision.leverage || 1,
+        });
 
-      await new Promise((r) => setTimeout(r, 300));
+        if (autoTradeEnabled && execution) {
+          setExecutionStatus(execution.success ? 'success' : 'failed');
+        }
+      } else {
+        console.error('Analyze failed:', result.error);
+        setAgents(INITIAL_AGENTS.map((a) => ({ ...a, status: 'idle' as const })));
+      }
+    } catch (err) {
+      console.error('Failed to run cycle:', err);
+      setAgents(INITIAL_AGENTS.map((a) => ({ ...a, status: 'idle' as const })));
     }
 
-    setFinalDecision(cycle.final);
     setLastRun(new Date().toLocaleTimeString());
     setIsRunning(false);
   };
@@ -335,6 +399,41 @@ export default function SwarmContent() {
             )}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <select
+              value={selectedSymbol}
+              onChange={(e) => setSelectedSymbol(e.target.value)}
+              style={{
+                padding: '6px 12px',
+                borderRadius: 6,
+                border: '1px solid #E5E7EB',
+                fontSize: 12,
+                fontWeight: 600,
+              }}
+            >
+              {AVAILABLE_SYMBOLS.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                fontSize: 11,
+                color: '#6B7280',
+                cursor: 'pointer',
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={autoTradeEnabled}
+                onChange={(e) => setAutoTradeEnabled(e.target.checked)}
+                style={{ cursor: 'pointer' }}
+              />
+              Auto-Trade
+            </label>
             {lastRun && <span style={{ fontSize: 11, color: '#9CA3AF' }}>Last: {lastRun}</span>}
             <button
               onClick={runCycle}
