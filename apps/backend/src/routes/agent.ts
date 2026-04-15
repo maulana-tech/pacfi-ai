@@ -31,6 +31,51 @@ router.get('/status', async (c) => {
 });
 
 /**
+ * POST /agent/bind
+ * Bind the backend agent wallet to the user's account on Pacifica.
+ * Must be called once per account before agent-signed orders can execute.
+ *
+ * The user signs the payload { agent_wallet } with their own wallet (Phantom).
+ * Body: { signature: string, timestamp: number }
+ * Headers: X-Wallet-Address
+ */
+router.post('/bind', async (c) => {
+  try {
+    const walletAddress = c.req.header('X-Wallet-Address');
+    if (!walletAddress) {
+      return c.json(errorEnvelope('X-Wallet-Address header required'), 400);
+    }
+
+    const agentStatus = pacificaAgentWalletService.getStatus();
+    if (!agentStatus.enabled || !agentStatus.agentWallet) {
+      return c.json(errorEnvelope('Agent wallet not configured on backend'), 503);
+    }
+
+    const body = await c.req.json();
+    const { signature, timestamp } = body;
+
+    if (!signature || typeof signature !== 'string') {
+      return c.json(errorEnvelope('Missing field: signature'), 400);
+    }
+    if (!timestamp || typeof timestamp !== 'number') {
+      return c.json(errorEnvelope('Missing field: timestamp'), 400);
+    }
+
+    const result = await pacificaClient.bindAgentWallet(
+      walletAddress,
+      signature,
+      timestamp,
+      agentStatus.agentWallet
+    );
+
+    return c.json(successEnvelope({ bound: true, agentWallet: agentStatus.agentWallet, result }));
+  } catch (error) {
+    console.error('[Agent] Error binding agent wallet:', error);
+    return c.json(errorEnvelope(error instanceof Error ? error.message : 'Bind failed'), 500);
+  }
+});
+
+/**
  * POST /agent/analyze
  * Run a full AI swarm analysis cycle on a symbol.
  * Saves per-agent logs to DB when wallet is provided.
@@ -158,7 +203,28 @@ router.post('/analyze', async (c) => {
       leverage: 1,
     };
 
-    const decision = await swarmCoordinator.executeCycle(marketData, balance);
+    const { decision, agentLogs } = await swarmCoordinator.executeCycle(marketData, balance);
+
+    // ── Persist per-agent logs ─────────────────────────────────────────────
+    const walletAddress = c.req.header('X-Wallet-Address');
+    if (walletAddress) {
+      try {
+        const userId = await ensureUser(walletAddress);
+        await db.insert(aiLogs).values(
+          agentLogs.map((log) => ({
+            userId,
+            agentName: log.agentName,
+            agentModel: log.agentModel,
+            inputContext: log.inputContext,
+            outputDecision: log.outputDecision,
+            confidence: log.confidence !== null ? String(log.confidence) : null,
+          }))
+        );
+      } catch (logErr) {
+        // Non-fatal — don't fail the analysis response if logging errors
+        console.warn('[Agent] Failed to persist ai_logs:', logErr);
+      }
+    }
 
     let execution: { success: boolean; orderId?: string; error?: string } | undefined;
 
