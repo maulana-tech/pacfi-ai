@@ -67,6 +67,30 @@ pnpm run build
 cd apps/backend && node dist/index.js
 ```
 
+### Option 3: Railway (Cloud)
+
+```bash
+# Install Railway CLI
+npm i -g @railway/cli
+
+# Login
+railway login
+
+# Link to project
+railway init
+
+# Add environment variables
+railway variables set OPENROUTER_API_KEY=your_key
+railway variables set PACIFICA_AGENT_PRIVATE_KEY=your_key
+railway variables set PACIFICA_AGENT_ACCOUNT=your_account
+railway variables set NODE_ENV=production
+
+# Deploy
+railway up
+```
+
+Or connect your GitHub repo in Railway dashboard and add environment variables there.
+
 ### Option 3: Deploy to Cloud
 
 #### Railway
