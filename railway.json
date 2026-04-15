@@ -4,7 +4,7 @@
   "build": {
     "builder": "NIXPACKS",
     "buildCommand": "corepack enable && pnpm install && pnpm run build",
-    "startCommand": "cd apps/backend && node dist/index.js",
+    "startCommand": "sh -c PORT=3001 pnpm --filter @pacfi/backend dev",
     "env": {
       "NODE_VERSION": "20"
     }
