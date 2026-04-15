@@ -18,15 +18,24 @@ const DEFAULT_AGENTS = [
   { id: 'coordinator', name: 'Coordinator', role: 'Final Decision' },
 ];
 
+// Pacifica returns snake_case; also accept camelCase for any internally-normalized positions
 type PositionLike = {
   symbol?: string;
   side?: string;
   size?: string | number;
+  // Pacifica native (snake_case)
+  entry_price?: string | number;
+  mark_price?: string | number;
+  liquidation_price?: string | number;
+  unrealized_pnl?: string | number;
+  initial_margin?: string | number;
+  // Internally normalized (camelCase)
   entryPrice?: string | number;
   markPrice?: string | number;
   liquidationPrice?: string | number;
-  leverage?: string | number;
   unrealizedPnl?: string | number;
+  initialMargin?: string | number;
+  leverage?: string | number;
   pnlPct?: string | number;
 };
 
@@ -71,15 +80,17 @@ router.get('/summary', async (c) => {
       return c.json(errorEnvelope('Invalid wallet address'), 400);
     }
 
-    const [balance, positions] = await Promise.all([
-      pacificaClient.getBalance(wallet.walletAddress).catch(() => 0),
+    const [accountInfo, positions] = await Promise.all([
+      pacificaClient.getAccountInfo(wallet.walletAddress).catch(() => ({ equity: 0, availableBalance: 0, unrealizedPnl: 0, initialMargin: 0 })),
       pacificaClient.getPositions(wallet.walletAddress).catch(() => []),
     ]);
 
+    const balance = accountInfo.equity;
     const openPositions = Array.isArray(positions) ? (positions as PositionLike[]) : [];
-    const openPnl = openPositions.reduce((acc, item) => {
-      return acc + parseNumber(item.unrealizedPnl ?? 0, 0);
-    }, 0);
+    const openPnl = accountInfo.unrealizedPnl ||
+      openPositions.reduce((acc, item) => {
+        return acc + parseNumber(item.unrealized_pnl ?? item.unrealizedPnl ?? 0, 0);
+      }, 0);
 
     let totalTrades = 0;
     let winRate = 0;
@@ -133,21 +144,25 @@ router.get('/portfolio', async (c) => {
       return c.json(errorEnvelope('Invalid wallet address'), 400);
     }
 
-    const [balance, positions] = await Promise.all([
-      pacificaClient.getBalance(wallet.walletAddress).catch(() => 0),
+    const [accountInfo, positions] = await Promise.all([
+      pacificaClient.getAccountInfo(wallet.walletAddress).catch(() => ({ equity: 0, availableBalance: 0, unrealizedPnl: 0, initialMargin: 0 })),
       pacificaClient.getPositions(wallet.walletAddress).catch(() => []),
     ]);
 
+    const balance = accountInfo.equity;
     const openPositions = Array.isArray(positions) ? (positions as PositionLike[]) : [];
 
+    // Use mark price for notional so allocation reflects current value
     const totalNotional = openPositions.reduce((acc, p) => {
-      return acc + parseNumber(p.size, 0) * parseNumber(p.entryPrice, 0);
+      const px = parseNumber(p.mark_price ?? p.markPrice ?? p.entry_price ?? p.entryPrice, 0);
+      return acc + parseNumber(p.size, 0) * px;
     }, 0);
 
     const allocationMap = new Map<string, number>();
     for (const p of openPositions) {
       const sym = String(p.symbol ?? 'UNKNOWN').toUpperCase();
-      const notional = parseNumber(p.size, 0) * parseNumber(p.entryPrice, 0);
+      const px = parseNumber(p.mark_price ?? p.markPrice ?? p.entry_price ?? p.entryPrice, 0);
+      const notional = parseNumber(p.size, 0) * px;
       allocationMap.set(sym, (allocationMap.get(sym) ?? 0) + notional);
     }
 
@@ -172,8 +187,9 @@ router.get('/portfolio', async (c) => {
       return c.json(
         successEnvelope({
           totalBalance: balance,
-          availableBalance: balance,
+          availableBalance: accountInfo.availableBalance || balance,
           totalPnL: 0,
+          openPnl: accountInfo.unrealizedPnl,
           totalROI: 0,
           winRate: 0,
           sharpeRatio: 0,
@@ -248,15 +264,21 @@ router.get('/portfolio', async (c) => {
       if (drawdown > maxDrawdown) maxDrawdown = drawdown;
     }
 
-    const openPnl = openPositions.reduce((acc, p) => acc + parseNumber(p.unrealizedPnl ?? 0, 0), 0);
-    const availableBalance = balance - openPositions.reduce((acc, p) => {
-      return acc + parseNumber(p.size, 0) * parseNumber(p.entryPrice, 0) / parseNumber(p.leverage ?? 1, 1);
-    }, 0);
+    // Prefer Pacifica-provided values; fall back to computing from positions
+    const openPnl = accountInfo.unrealizedPnl ||
+      openPositions.reduce((acc, p) => acc + parseNumber(p.unrealized_pnl ?? p.unrealizedPnl ?? 0, 0), 0);
+    const availableBalance = accountInfo.availableBalance ||
+      Math.max(0, balance - openPositions.reduce((acc, p) => {
+        const margin = parseNumber(p.initial_margin ?? p.initialMargin, 0);
+        if (margin > 0) return acc + margin;
+        const px = parseNumber(p.entry_price ?? p.entryPrice, 0);
+        return acc + parseNumber(p.size, 0) * px / parseNumber(p.leverage ?? 1, 1);
+      }, 0));
 
     return c.json(
       successEnvelope({
         totalBalance: balance,
-        availableBalance: Math.max(0, availableBalance),
+        availableBalance,
         totalPnL,
         openPnl,
         totalROI,
@@ -290,16 +312,18 @@ router.get('/positions', async (c) => {
           const symbol = String(item.symbol ?? 'UNKNOWN').toUpperCase();
           const sideRaw = String(item.side ?? 'LONG').toUpperCase();
           const side = sideRaw === 'ASK' || sideRaw === 'SHORT' ? 'SHORT' : 'LONG';
+          const entryPrice = parseNumber(item.entry_price ?? item.entryPrice, 0);
+          const markPrice = parseNumber(item.mark_price ?? item.markPrice ?? item.entry_price ?? item.entryPrice, 0);
 
           return {
             symbol,
             side,
             size: parseNumber(item.size, 0),
-            entryPrice: parseNumber(item.entryPrice, 0),
-            markPrice: parseNumber(item.markPrice, parseNumber(item.entryPrice, 0)),
-            pnl: parseNumber(item.unrealizedPnl, 0),
+            entryPrice,
+            markPrice,
+            pnl: parseNumber(item.unrealized_pnl ?? item.unrealizedPnl, 0),
             pnlPct: parseNumber(item.pnlPct, 0),
-            liquidationPrice: parseNumber(item.liquidationPrice, 0),
+            liquidationPrice: parseNumber(item.liquidation_price ?? item.liquidationPrice, 0),
             leverage: parseNumber(item.leverage, 1),
           };
         })
@@ -571,9 +595,6 @@ router.get('/swarm-history', async (c) => {
     const decisions = recentTrades.map((t) => {
       const pnlVal = parseNumber(t.pnl, 0);
       const result = t.status === 'OPEN' ? 'OPEN' : pnlVal > 0 ? 'WIN' : 'LOSS';
-      const pnlStr = t.pnl
-        ? `${pnlVal >= 0 ? '+' : ''}$${Math.abs(pnlVal).toFixed(2)}`
-        : null;
       const executedDate = t.executedAt ? new Date(t.executedAt) : new Date();
       const time = executedDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
 
@@ -581,9 +602,9 @@ router.get('/swarm-history', async (c) => {
         time,
         symbol: t.symbol,
         action: t.side === 'BUY' ? 'BUY' : 'SELL',
-        confidence: confidenceByTrade.get(t.id) ?? null,
+        confidence: confidenceByTrade.get(t.id) ?? 0,
         result,
-        pnl: pnlStr,
+        pnl: pnlVal,
       };
     });
 
