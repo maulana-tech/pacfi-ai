@@ -15,5 +15,5 @@ RUN pnpm --filter @pacfi/frontend build
 # Expose port
 EXPOSE 3001
 
-# Start backend - use npx to run tsx from node_modules
-CMD ["pnpm", "--filter", "@pacfi/backend", "dev"]
+# Start backend with tsx - pass PORT from environment
+CMD ["sh", "-c", "PORT=3001 pnpm --filter @pacfi/backend dev"]
