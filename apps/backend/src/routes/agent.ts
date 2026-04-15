@@ -1,58 +1,164 @@
 import { Hono } from 'hono';
+import { eq } from 'drizzle-orm';
 import { successEnvelope, errorEnvelope } from '../lib/api';
 import { pacificaAgentWalletService } from '../services/agent-wallet';
 import { PacificaClient } from '../services/pacifica';
 import { SwarmCoordinator } from '../services/swarm';
+import { db } from '../db';
+import { aiLogs, users } from '../db/schema';
 
 const router = new Hono();
 const pacificaClient = new PacificaClient();
 const swarmCoordinator = new SwarmCoordinator();
 
+const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'nvidia/nemotron-3-super-120b-a12b:free';
+
+async function ensureUser(walletAddress: string): Promise<string> {
+  const existing = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.walletAddress, walletAddress))
+    .limit(1);
+
+  if (existing.length > 0) return existing[0].id;
+
+  const [created] = await db.insert(users).values({ walletAddress }).returning({ id: users.id });
+  return created.id;
+}
+
 router.get('/status', async (c) => {
   return c.json(successEnvelope(pacificaAgentWalletService.getStatus()));
 });
 
+/**
+ * POST /agent/analyze
+ * Run a full AI swarm analysis cycle on a symbol.
+ * Saves per-agent logs to DB when wallet is provided.
+ *
+ * Body: { symbol: string, portfolioBalance?: number }
+ * Headers (optional): X-Wallet-Address — used to associate logs with the user
+ */
 router.post('/analyze', async (c) => {
   try {
+    if (!process.env.OPENROUTER_API_KEY) {
+      return c.json(errorEnvelope('OPENROUTER_API_KEY is not configured on backend'), 503);
+    }
+
     const body = await c.req.json();
     const { symbol, portfolioBalance, autoTrade } = body;
 
-    if (!symbol) {
+    if (!symbol || typeof symbol !== 'string') {
       return c.json(errorEnvelope('Missing required field: symbol'), 400);
     }
 
     const balance = portfolioBalance || 10000;
     const shouldAutoTrade = autoTrade === true;
 
-    const [orderbook, marketInfo] = await Promise.all([
-      pacificaClient.getOrderbook(symbol),
-      pacificaClient.getPrices(),
+    const resolvedSymbol = await pacificaClient.resolveSymbol(symbol);
+
+    // ── Fetch real market data ─────────────────────────────────────────────
+    const [orderbookResult, infoResult, tradesResult] = await Promise.allSettled([
+      pacificaClient.getOrderbook(resolvedSymbol),
+      pacificaClient.getMarketInfo(),
+      pacificaClient.getRecentTrades(resolvedSymbol),
     ]);
 
-    const symbolInfo = marketInfo?.find((m: any) => m.symbol === symbol);
+    // Mid price from best bid/ask
+    let price = 0;
+    if (orderbookResult.status === 'fulfilled') {
+      const bid = parseFloat(orderbookResult.value.bids[0]?.price ?? '0');
+      const ask = parseFloat(orderbookResult.value.asks[0]?.price ?? '0');
+      price = bid > 0 && ask > 0 ? (bid + ask) / 2 : bid || ask;
+    }
 
-    const bestBid = parseFloat(orderbook.bids[0]?.price || '0');
-    const bestAsk = parseFloat(orderbook.asks[0]?.price || '0');
-    const currentPrice = bestBid && bestAsk ? (bestBid + bestAsk) / 2 : bestBid || bestAsk || 0;
+    // Funding rate + specs from market info
+    let fundingRate = 0;
+    let maxLeverage = 10;
+    if (infoResult.status === 'fulfilled' && Array.isArray(infoResult.value)) {
+      const info = infoResult.value.find(
+        (m: any) =>
+          String(m.symbol).toUpperCase() === resolvedSymbol.toUpperCase() ||
+          String(m.symbol).toUpperCase() === String(symbol).toUpperCase()
+      );
+      if (info) {
+        fundingRate = parseFloat(info.funding_rate ?? '0');
+        maxLeverage = info.max_leverage ?? 10;
+      }
+    }
 
-    const context = {
-      symbol,
-      currentPrice,
-      priceChange24h: 0,
-      volume24h: parseFloat(String(symbolInfo?.volume24h || 0)),
-      fundingRate: parseFloat(String(symbolInfo?.funding_rate || 0)),
+    // Additional context from recent candles to align analysis with viewed market regime.
+    let candleSnapshot: {
+      interval: string;
+      close: number;
+      open: number;
+      high: number;
+      low: number;
+      volume: number;
+    }[] = [];
+    try {
+      const rawCandles = await pacificaClient.getCandleData(resolvedSymbol, '5m', 24);
+      if (Array.isArray(rawCandles)) {
+        candleSnapshot = rawCandles
+          .slice(-8)
+          .map((c: any) => ({
+            interval: '5m',
+            open: Number.parseFloat(c.o ?? c.open ?? '0'),
+            high: Number.parseFloat(c.h ?? c.high ?? '0'),
+            low: Number.parseFloat(c.l ?? c.low ?? '0'),
+            close: Number.parseFloat(c.c ?? c.close ?? '0'),
+            volume: Number.parseFloat(c.v ?? c.volume ?? '0'),
+          }))
+          .filter((c) => Number.isFinite(c.close) && c.close > 0);
+      }
+    } catch {
+      // Non-fatal. Swarm can still analyze from orderbook/trades context.
+    }
+
+    // 24h stats from recent trades
+    let volume24h = 0;
+    let high24h = price;
+    let low24h = price;
+    let priceChange24h = 0;
+
+    if (
+      tradesResult.status === 'fulfilled' &&
+      Array.isArray(tradesResult.value) &&
+      tradesResult.value.length > 0
+    ) {
+      const trs = tradesResult.value;
+      const prices = trs
+        .map((t: any) => parseFloat(t.price))
+        .filter((p: number) => isFinite(p) && p > 0);
+      if (prices.length > 0) {
+        high24h = Math.max(...prices);
+        low24h = Math.min(...prices);
+        const latest = prices[0];
+        const oldest = prices[prices.length - 1];
+        priceChange24h = oldest > 0 ? ((latest - oldest) / oldest) * 100 : 0;
+        volume24h = trs.reduce((acc: number, t: any) => {
+          const p = parseFloat(t.price);
+          const a = parseFloat(t.amount);
+          return isFinite(p) && isFinite(a) ? acc + p * a : acc;
+        }, 0);
+      }
+    }
+
+    const marketData = {
+      symbol: resolvedSymbol,
+      price,
+      markPrice: price,
+      indexPrice: price,
+      priceChange24h,
+      volume24h,
+      fundingRate,
       openInterest: 0,
-      markPrice: currentPrice,
-      indexPrice: currentPrice,
-      high24h: currentPrice * 1.02,
-      low24h: currentPrice * 0.98,
+      high24h,
+      low24h,
+      timestamp: Date.now(),
       leverage: 1,
     };
 
-    const decision = await swarmCoordinator.executeCycle(
-      { ...context, timestamp: Date.now() } as any,
-      balance
-    );
+    const decision = await swarmCoordinator.executeCycle(marketData, balance);
 
     let execution: { success: boolean; orderId?: string; error?: string } | undefined;
 
@@ -63,7 +169,7 @@ router.post('/analyze', async (c) => {
         try {
           const side = decision.action === 'BUY' ? 'bid' : 'ask';
           const amount = String(
-            decision.positionSize || Math.floor(((balance * 0.1) / currentPrice) * 100) / 100
+            decision.positionSize || Math.floor(((balance * 0.1) / (price || 1)) * 100) / 100
           );
 
           const signed = pacificaAgentWalletService.signOrder('auto-trade', 'market', {
@@ -96,7 +202,7 @@ router.post('/analyze', async (c) => {
       successEnvelope({
         symbol,
         decision,
-        marketContext: context,
+        marketContext: marketData,
         execution,
       })
     );
