@@ -133,10 +133,17 @@ router.get('/portfolio', async (c) => {
       return c.json(errorEnvelope('Invalid wallet address'), 400);
     }
 
-    const [balance, positions] = await Promise.all([
-      pacificaClient.getBalance(wallet.walletAddress).catch(() => 0),
-      pacificaClient.getPositions(wallet.walletAddress).catch(() => []),
-    ]);
+    let balance = 0;
+    let positions: any[] = [];
+    
+    try {
+      [balance, positions] = await Promise.all([
+        pacificaClient.getBalance(wallet.walletAddress).catch(() => 0),
+        pacificaClient.getPositions(wallet.walletAddress).catch(() => []),
+      ]);
+    } catch (apiError) {
+      console.warn('[Dashboard] API error in portfolio:', apiError);
+    }
 
     const openPositions = Array.isArray(positions) ? (positions as PositionLike[]) : [];
 
@@ -163,30 +170,28 @@ router.get('/portfolio', async (c) => {
       color: COLORS[name] ?? '#E5E7EB',
     }));
 
-    const userRow = await db.query.users.findFirst({
-      where: eq(users.walletAddress, wallet.walletAddress),
-      columns: { id: true },
-    });
-
-    if (!userRow) {
-      return c.json(
-        successEnvelope({
-          totalBalance: balance,
-          availableBalance: balance,
-          totalPnL: 0,
-          totalROI: 0,
-          winRate: 0,
-          sharpeRatio: 0,
-          maxDrawdown: 0,
-          avgWin: 0,
-          avgLoss: 0,
-          profitFactor: 0,
-          totalTrades: 0,
-          allocation,
-          equityCurve: [],
-        })
-      );
-    }
+    return c.json(
+      successEnvelope({
+        totalBalance: balance,
+        availableBalance: balance,
+        totalPnL: 0,
+        totalROI: 0,
+        winRate: 0,
+        sharpeRatio: 0,
+        maxDrawdown: 0,
+        avgWin: 0,
+        avgLoss: 0,
+        profitFactor: 0,
+        totalTrades: 0,
+        allocation,
+        equityCurve: [],
+      })
+    );
+  } catch (error) {
+    console.error('[Dashboard] Error fetching portfolio:', error);
+    return c.json(errorEnvelope('Failed to fetch portfolio'), 500);
+  }
+});
 
     const allTrades = await db
       .select({
@@ -284,7 +289,13 @@ router.get('/positions', async (c) => {
       return c.json(errorEnvelope('Invalid wallet address'), 400);
     }
 
-    const positions = await pacificaClient.getPositions(wallet.walletAddress);
+    let positions: any[] = [];
+    try {
+      positions = await pacificaClient.getPositions(wallet.walletAddress).catch(() => []);
+    } catch (apiError) {
+      console.warn('[Dashboard] API error getting positions:', apiError);
+    }
+    
     const normalized = Array.isArray(positions)
       ? (positions as PositionLike[]).map((item) => {
           const symbol = String(item.symbol ?? 'UNKNOWN').toUpperCase();
