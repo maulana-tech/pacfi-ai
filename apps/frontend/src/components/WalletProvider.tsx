@@ -11,7 +11,14 @@ import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
 
 import '@solana/wallet-adapter-react-ui/styles.css';
 
-const RPC_ENDPOINT = 'https://api.devnet.solana.com';
+/**
+ * RPC endpoint for Solana transactions.
+ * For Pacifica testnet, use Solana devnet: https://api.devnet.solana.com
+ * For Pacifica mainnet, use Solana mainnet: https://api.mainnet-beta.solana.com
+ * Can be overridden via PUBLIC_SOLANA_RPC_URL environment variable
+ */
+const RPC_ENDPOINT = (import.meta.env.PUBLIC_SOLANA_RPC_URL as string | undefined) || 
+  'https://api.devnet.solana.com';
 
 export default function WalletProvider({ children }: { children: React.ReactNode }) {
   const [mounted, setMounted] = useState(false);

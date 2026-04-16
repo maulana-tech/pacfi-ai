@@ -293,14 +293,16 @@ export class PacificaClient {
     builderCode?: string,
     leverage?: number
   ): Promise<any> {
-    const resolvedSymbol = await this.resolveSymbol(symbol);
+    // Do NOT resolve symbol — the signed payload uses the raw symbol (e.g. "BTC"),
+    // and the request body must match exactly what was signed.
+    // Pacifica accepts bare symbols like "BTC" directly (confirmed in Python SDK).
     const body: Record<string, unknown> = {
       account: walletAddress,
       agent_wallet: agentWallet ?? null,
       signature,
       timestamp,
       expiry_window: 30000,
-      symbol: resolvedSymbol,
+      symbol,
       side,
       amount,
       slippage_percent: '0.5',
@@ -343,14 +345,14 @@ export class PacificaClient {
     builderCode?: string,
     leverage?: number
   ): Promise<any> {
-    const resolvedSymbol = await this.resolveSymbol(symbol);
+    // Do NOT resolve symbol — same reason as createMarketOrder.
     const body: Record<string, unknown> = {
       account: walletAddress,
       agent_wallet: agentWallet ?? null,
       signature,
       timestamp,
       expiry_window: 30000,
-      symbol: resolvedSymbol,
+      symbol,
       side,
       amount,
       price,
@@ -424,27 +426,79 @@ export class PacificaClient {
   }
 
   /**
-   * Get account balance
+   * Get account balance (equity / total balance)
+   * Pacifica returns: { equity, available_balance, unrealized_pnl, initial_margin, ... }
    * Endpoint: GET /account/balance?account=...
    */
   async getBalance(walletAddress: string): Promise<number> {
+    const info = await this.getAccountInfo(walletAddress);
+    return info.equity;
+  }
+
+  /**
+   * Get full account balance details from Pacifica.
+   * Returns equity (total balance), available balance, unrealized PnL and initial margin.
+   */
+  async getAccountInfo(walletAddress: string): Promise<{
+    equity: number;
+    availableBalance: number;
+    unrealizedPnl: number;
+    initialMargin: number;
+  }> {
+    const empty = { equity: 0, availableBalance: 0, unrealizedPnl: 0, initialMargin: 0 };
     try {
-      if (walletAddress.length > 50) {
-        console.warn('[PacificaClient] Address too long for Pacifica API, returning 0');
-        return 0;
-      }
-      const data = await this.request<{ totalBalance: string }>(
+      if (walletAddress.length > 50) return empty;
+      const data = await this.request<Record<string, string>>(
         `/account/balance?account=${walletAddress}`
       );
-      return parseFloat(data.totalBalance);
-    } catch (error: any) {
-      if (error.message?.includes('Wrong address size') || error.message?.includes('Not found')) {
-        console.warn('[PacificaClient] Invalid address for Pacifica, returning 0');
+      const pf = (key: string, ...aliases: string[]) => {
+        for (const k of [key, ...aliases]) {
+          if (data[k] != null) return parseFloat(data[k]) || 0;
+        }
         return 0;
+      };
+      return {
+        equity:           pf('equity', 'total_balance', 'totalBalance'),
+        availableBalance: pf('available_balance', 'availableBalance', 'free_collateral', 'equity'),
+        unrealizedPnl:    pf('unrealized_pnl', 'unrealizedPnl'),
+        initialMargin:    pf('initial_margin', 'initialMargin'),
+      };
+    } catch (error: any) {
+      if (
+        error.message?.includes('Wrong address size') ||
+        error.message?.includes('Not found') ||
+        error.message?.includes('404')
+      ) {
+        return empty;
       }
-      console.error('[PacificaClient] Error fetching balance:', error);
-      return 0;
+      console.error('[PacificaClient] Error fetching account info:', error);
+      return empty;
     }
+  }
+
+  /**
+   * Bind an agent wallet to an account so it can sign orders on behalf of the user.
+   * The user (account) signs the binding payload; the agent wallet is the delegate.
+   * Endpoint: POST /agent/bind
+   */
+  async bindAgentWallet(
+    walletAddress: string,
+    signature: string,
+    timestamp: number,
+    agentWallet: string,
+    expiryWindow: number = 5000
+  ): Promise<any> {
+    return this.request('/agent/bind', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        account: walletAddress,
+        signature,
+        timestamp,
+        expiry_window: expiryWindow,
+        agent_wallet: agentWallet,
+      }),
+    });
   }
 
   async approveBuilderCode(

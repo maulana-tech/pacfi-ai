@@ -1,5 +1,18 @@
 import { SwarmDecision, MarketData } from '../types';
 
+export interface AgentLog {
+  agentName: string;
+  agentModel: string;
+  inputContext: string;
+  outputDecision: string;
+  confidence: number | null;
+}
+
+export interface SwarmCycleResult {
+  decision: SwarmDecision;
+  agentLogs: AgentLog[];
+}
+
 interface AgentResponse {
   signal?: 'BUY' | 'SELL' | 'HOLD';
   action?: 'BUY' | 'SELL' | 'HOLD';
@@ -68,6 +81,9 @@ export class QwenAgent {
   private provider: ModelProvider;
   private baseModel: string;
   private agentName: string;
+
+  get modelName(): string { return this.baseModel || 'mock'; }
+  get name(): string { return this.agentName; }
 
   constructor(role: string, prompt: string, modelType: 'deep' | 'quick' = 'deep') {
     this.agentName = role;
@@ -260,36 +276,42 @@ Return ONLY a raw JSON object with no markdown, no code fences, no extra text:
     );
   }
 
-  async executeCycle(marketData: MarketData, portfolioBalance: number): Promise<SwarmDecision> {
+  async executeCycle(marketData: MarketData, portfolioBalance: number): Promise<SwarmCycleResult> {
     console.log(`[SwarmCoordinator] Starting cycle for ${marketData.symbol} @ $${marketData.price}`);
 
+    const marketInput = JSON.stringify({
+      symbol: marketData.symbol,
+      price: marketData.price,
+      high24h: marketData.high24h,
+      low24h: marketData.low24h,
+      priceChange24h: marketData.priceChange24h,
+      volume24h: marketData.volume24h,
+      fundingRate: marketData.fundingRate,
+    });
+
+    const sentimentInput = JSON.stringify({
+      fundingRate: marketData.fundingRate,
+      volume24h: marketData.volume24h,
+      priceChange24h: marketData.priceChange24h,
+    });
+
     const [marketAnalysis, sentimentAnalysis] = await Promise.all([
-      this.marketAnalyst.analyze(JSON.stringify({
-        symbol: marketData.symbol,
-        price: marketData.price,
-        high24h: marketData.high24h,
-        low24h: marketData.low24h,
-        priceChange24h: marketData.priceChange24h,
-        volume24h: marketData.volume24h,
-        fundingRate: marketData.fundingRate,
-      })),
-      this.sentimentAgent.analyze(JSON.stringify({
-        fundingRate: marketData.fundingRate,
-        volume24h: marketData.volume24h,
-        priceChange24h: marketData.priceChange24h,
-      })),
+      this.marketAnalyst.analyze(marketInput),
+      this.sentimentAgent.analyze(sentimentInput),
     ]);
 
-    const riskParams = await this.riskManager.analyze(JSON.stringify({
+    const riskInput = JSON.stringify({
       signal: marketAnalysis.signal ?? marketAnalysis.action,
       signalConfidence: marketAnalysis.confidence,
       sentiment: sentimentAnalysis.sentiment,
       sentimentStrength: sentimentAnalysis.strength,
       portfolioBalance,
       currentPrice: marketData.price,
-    }));
+    });
 
-    const finalDecision = await this.coordinator.analyze(JSON.stringify({
+    const riskParams = await this.riskManager.analyze(riskInput);
+
+    const coordinatorInput = JSON.stringify({
       market: {
         signal: marketAnalysis.signal ?? marketAnalysis.action,
         confidence: marketAnalysis.confidence,
@@ -304,14 +326,16 @@ Return ONLY a raw JSON object with no markdown, no code fences, no extra text:
         leverage: riskParams.leverage,
         stopLoss: riskParams.stopLossPct,
       },
-    }));
+    });
+
+    const finalDecision = await this.coordinator.analyze(coordinatorInput);
 
     const action = (finalDecision.action ?? finalDecision.signal ?? 'HOLD') as 'BUY' | 'SELL' | 'HOLD';
     const confidence = finalDecision.confidence ?? 0;
 
     console.log(`[SwarmCoordinator] Decision: ${action} (${confidence}% confidence)`);
 
-    return {
+    const decision: SwarmDecision = {
       action,
       confidence,
       reasoning: finalDecision.reasoning ?? finalDecision.reason ?? 'No reasoning provided',
@@ -319,5 +343,38 @@ Return ONLY a raw JSON object with no markdown, no code fences, no extra text:
       leverage: riskParams.leverage ?? 1,
       stopLossPct: riskParams.stopLossPct,
     };
+
+    const agentLogs: AgentLog[] = [
+      {
+        agentName: this.marketAnalyst.name,
+        agentModel: this.marketAnalyst.modelName,
+        inputContext: marketInput,
+        outputDecision: JSON.stringify(marketAnalysis),
+        confidence: marketAnalysis.confidence ?? null,
+      },
+      {
+        agentName: this.sentimentAgent.name,
+        agentModel: this.sentimentAgent.modelName,
+        inputContext: sentimentInput,
+        outputDecision: JSON.stringify(sentimentAnalysis),
+        confidence: sentimentAnalysis.strength ?? null,
+      },
+      {
+        agentName: this.riskManager.name,
+        agentModel: this.riskManager.modelName,
+        inputContext: riskInput,
+        outputDecision: JSON.stringify(riskParams),
+        confidence: null,
+      },
+      {
+        agentName: this.coordinator.name,
+        agentModel: this.coordinator.modelName,
+        inputContext: coordinatorInput,
+        outputDecision: JSON.stringify(finalDecision),
+        confidence: finalDecision.confidence ?? null,
+      },
+    ];
+
+    return { decision, agentLogs };
   }
 }

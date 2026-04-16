@@ -66,6 +66,36 @@ export async function pacificaRequest<T>(
   return (payload.data ?? payload) as T;
 }
 
+/**
+ * Build the payload the user must sign to bind an agent wallet to their account.
+ * Type: "bind_agent_wallet", data: { agent_wallet }
+ */
+export function buildAgentBindSigningPayload(agentWallet: string, timestamp: number) {
+  return {
+    timestamp,
+    expiry_window: 5000,
+    type: 'bind_agent_wallet',
+    data: {
+      agent_wallet: agentWallet,
+    },
+  };
+}
+
+export async function bindAgentWallet(
+  walletAddress: string,
+  signature: string,
+  timestamp: number
+): Promise<{ bound: boolean; agentWallet: string }> {
+  return pacificaRequest<{ bound: boolean; agentWallet: string }>(
+    '/agent/bind',
+    walletAddress,
+    {
+      method: 'POST',
+      body: JSON.stringify({ signature, timestamp }),
+    }
+  );
+}
+
 export function buildBuilderSigningPayload(
   type: BuilderOperationType,
   data: Record<string, unknown>,

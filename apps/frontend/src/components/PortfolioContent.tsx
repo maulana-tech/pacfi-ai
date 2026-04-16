@@ -281,7 +281,7 @@ export default function PortfolioContent() {
             </button>
           ))}
         </div>
-        {tab === 'history' && <TradesTable />}
+        {tab === 'history' && <TradesTable walletAddress={walletAddress} limit={50} />}
         {tab === 'performance' && (
           <div style={{ padding: '20px', color: '#9CA3AF', fontSize: 13, textAlign: 'center' }}>
             AI performance breakdown coming soon

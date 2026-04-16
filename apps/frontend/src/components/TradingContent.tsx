@@ -4,6 +4,8 @@ import { useWalletContext } from './WalletConnect';
 import {
   buildMessageToSign,
   buildOrderSigningPayload,
+  buildAgentBindSigningPayload,
+  bindAgentWallet,
   fetchAgentStatus,
   fetchBuilderApprovals,
   AgentStatus,
@@ -97,6 +99,8 @@ export default function TradingContent() {
   const [aiAnalysis, setAiAnalysis] = useState<AISwarmResult | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [bindingAgent, setBindingAgent] = useState(false);
+  const [bindNotice, setBindNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   useEffect(() => {
     try {
@@ -192,6 +196,37 @@ export default function TradingContent() {
     if (aiAnalysis.action === 'BUY') setSide('buy');
     else if (aiAnalysis.action === 'SELL') setSide('sell');
     if (aiAnalysis.leverage) setLeverage(Math.min(aiAnalysis.leverage, maxLev));
+    // Compute size from AI position size (USD) ÷ current price
+    if (aiAnalysis.positionSize && market.price > 0) {
+      const rawAmount = aiAnalysis.positionSize / market.price;
+      setSize(String(parseFloat(rawAmount.toPrecision(4))));
+    }
+  }
+
+  // Auto-apply when Agent mode receives fresh analysis
+  useEffect(() => {
+    if (executionMode === 'agent' && aiAnalysis && !isAnalyzing) {
+      applyAIToOrder();
+    }
+  }, [aiAnalysis, isAnalyzing]);
+
+  async function handleBindAgent() {
+    if (!isConnected || !walletAddress || !agentStatus?.agentWallet) return;
+    setBindingAgent(true);
+    setBindNotice(null);
+    try {
+      const timestamp = Date.now();
+      const payload = buildAgentBindSigningPayload(agentStatus.agentWallet, timestamp);
+      const message = buildMessageToSign(payload);
+      const signature = await signMessage(message);
+      await bindAgentWallet(walletAddress, signature, timestamp);
+      setBindNotice({ type: 'success', text: `Agent wallet bound! Auto-trading enabled.` });
+      fetchAgentStatus().then(setAgentStatus).catch(() => undefined);
+    } catch (err) {
+      setBindNotice({ type: 'error', text: err instanceof Error ? err.message : 'Bind failed' });
+    } finally {
+      setBindingAgent(false);
+    }
   }
 
   async function refreshBalance() {
@@ -218,10 +253,8 @@ export default function TradingContent() {
         ? { amount: size, client_order_id: clientOrderId, reduce_only: false, side: signedSide, slippage_percent: '0.5', symbol: selectedSymbol, ...(selectedBuilder ? { builder_code: selectedBuilder } : {}) }
         : { amount: size, client_order_id: clientOrderId, price: limitPrice, reduce_only: false, side: signedSide, symbol: selectedSymbol, tif: 'GTC', ...(selectedBuilder ? { builder_code: selectedBuilder } : {}) };
       const signingType = orderType === 'market' ? 'create_market_order' : 'create_order';
-      let signature: string | undefined;
-      if (executionMode === 'wallet') {
-        signature = await signMessage(buildMessageToSign(buildOrderSigningPayload(signingType, orderData, timestamp)));
-      }
+      // Both wallet and agent modes sign via Phantom — agent mode just pre-fills via AI
+      const signature = await signMessage(buildMessageToSign(buildOrderSigningPayload(signingType, orderData, timestamp)));
       const orderResult = await pacificaRequest<any>(orderType === 'market' ? '/orders/create-market' : '/orders/create-limit', walletAddress, {
         method: 'POST',
         body: JSON.stringify({ symbol: selectedSymbol, side: signedSide, amount: size, ...(orderType === 'limit' ? { price: limitPrice } : {}), leverage, clientOrderId, builderCode: selectedBuilder || undefined, signature, timestamp, executionMode }),
@@ -390,7 +423,74 @@ export default function TradingContent() {
             <div className="input-group"><div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><label className="input-label">Size ({selectedSymbol})</label><span style={{ fontSize: 10, color: '#64748B' }}>Min ${market.minOrderSize} USDC</span></div><input className="input-field" type="number" min="0" step={market.lotSize || '0.001'} value={size} onChange={(e) => setSize(e.target.value)} placeholder={`0.00 ${selectedSymbol}`} />{notional > 0 && <div style={{ fontSize: 11, color: '#64748B', marginTop: 4 }}>Approx. ${notional.toLocaleString('en-US', { maximumFractionDigits: 2 })} USDC</div>}</div>
             <div className="input-group"><div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><label className="input-label">Leverage</label><span className="num" style={{ fontSize: 13, fontWeight: 800, color: leverage >= maxLev * 0.8 ? '#EF4444' : leverage >= maxLev * 0.5 ? '#F59E0B' : '#0F172A' }}>{leverage}x</span></div><input type="range" min={1} max={maxLev} value={leverage} onChange={(e) => setLeverage(Number(e.target.value))} style={{ width: '100%', accentColor: side === 'buy' ? '#10B981' : '#EF4444' }} /><div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#94A3B8' }}><span>1x</span><span>{Math.round(maxLev / 2)}x</span><span>{maxLev}x</span></div></div>
             {market.bid > 0 && market.ask > 0 && <div style={{ display: 'flex', justifyContent: 'space-between', background: '#F8FAFC', borderRadius: 14, border: '1px solid #E2E8F0', padding: '10px 14px', fontSize: 12 }}><div><div style={{ color: '#10B981', fontWeight: 700, fontSize: 11 }}>BID</div><div className="num" style={{ fontWeight: 700 }}>${fmtPrice(market.bid, coin.tickSize)}</div></div><div style={{ textAlign: 'center', color: '#64748B', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2 }}><SpreadIcon /><span style={{ fontSize: 10 }}>spread ${(market.ask - market.bid).toFixed(coin.tickSize < 0.01 ? 4 : 2)}</span></div><div style={{ textAlign: 'right' }}><div style={{ color: '#EF4444', fontWeight: 700, fontSize: 11 }}>ASK</div><div className="num" style={{ fontWeight: 700 }}>${fmtPrice(market.ask, coin.tickSize)}</div></div></div>}
-            <div className="input-group"><label className="input-label">Execution Mode</label><div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>{(['wallet', 'agent'] as const).map((value) => { const disabled = value === 'agent' && (!agentStatus?.enabled || agentStatus.managedAccount !== walletAddress); return <button key={value} type="button" disabled={disabled} onClick={() => !disabled && setExecutionMode(value)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: '9px', borderRadius: 12, border: executionMode === value ? '1.5px solid #2563EB' : '1.5px solid #DBE4F0', background: executionMode === value ? '#EFF6FF' : '#FFFFFF', color: disabled ? '#CBD5E1' : executionMode === value ? '#2563EB' : '#475569', fontWeight: 700, fontSize: 12, cursor: disabled ? 'not-allowed' : 'pointer' }}>{value === 'wallet' ? <><WalletIcon /> Wallet Sign</> : <><BotIcon /> Agent</>}</button>; })}</div></div>
+            <div className="input-group">
+              <label className="input-label">Execution Mode</label>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                <button
+                  type="button"
+                  onClick={() => setExecutionMode('wallet')}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: '9px', borderRadius: 12, border: executionMode === 'wallet' ? '1.5px solid #2563EB' : '1.5px solid #DBE4F0', background: executionMode === 'wallet' ? '#EFF6FF' : '#FFFFFF', color: executionMode === 'wallet' ? '#2563EB' : '#475569', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}
+                >
+                  <WalletIcon /> Wallet Sign
+                </button>
+                <button
+                  type="button"
+                  disabled={!isConnected}
+                  onClick={() => {
+                    setExecutionMode('agent');
+                    if (!aiAnalysis && !isAnalyzing) runAIAnalysis();
+                  }}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: '9px', borderRadius: 12, border: executionMode === 'agent' ? '1.5px solid #7C3AED' : '1.5px solid #DBE4F0', background: executionMode === 'agent' ? 'linear-gradient(135deg, #EFF6FF, #F5F3FF)' : '#FFFFFF', color: !isConnected ? '#CBD5E1' : executionMode === 'agent' ? '#7C3AED' : '#475569', fontWeight: 700, fontSize: 12, cursor: !isConnected ? 'not-allowed' : 'pointer' }}
+                >
+                  <BotIcon /> AI Agent
+                </button>
+              </div>
+
+              {executionMode === 'agent' && (
+                <div style={{ marginTop: 8, padding: '10px 12px', background: 'linear-gradient(135deg, #F5F3FF, #EFF6FF)', border: '1px solid #C4B5FD', borderRadius: 10 }}>
+                  {isAnalyzing ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: '#6D28D9' }}>
+                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }}><circle cx="6" cy="6" r="4.5" stroke="rgba(109,40,217,0.3)" strokeWidth="1.5" /><path d="M6 1.5A4.5 4.5 0 0 1 10.5 6" stroke="#7C3AED" strokeWidth="1.5" strokeLinecap="round" /></svg>
+                      <span style={{ fontWeight: 600 }}>AI swarm analyzing {selectedSymbol}…</span>
+                    </div>
+                  ) : aiAnalysis ? (
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+                      <div style={{ fontSize: 11, color: '#5B21B6' }}>
+                        <span style={{ fontWeight: 700 }}>AI ready</span>
+                        {' — '}
+                        <span style={{ color: aiAnalysis.action === 'BUY' ? '#059669' : aiAnalysis.action === 'SELL' ? '#DC2626' : '#475569', fontWeight: 700 }}>
+                          {aiAnalysis.action}
+                        </span>
+                        {' '}
+                        <span style={{ color: '#7C3AED' }}>{aiAnalysis.confidence}% conf.</span>
+                        {' · order pre-filled'}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={runAIAnalysis}
+                        style={{ fontSize: 10, fontWeight: 700, color: '#7C3AED', background: '#EDE9FE', border: '1px solid #C4B5FD', borderRadius: 999, padding: '3px 8px', cursor: 'pointer' }}
+                      >
+                        Re-analyze
+                      </button>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                      <span style={{ fontSize: 11, color: '#6D28D9' }}>AI will analyze {selectedSymbol} and pre-fill this order.</span>
+                      <button
+                        type="button"
+                        onClick={runAIAnalysis}
+                        style={{ fontSize: 10, fontWeight: 700, color: '#7C3AED', background: '#EDE9FE', border: '1px solid #C4B5FD', borderRadius: 999, padding: '3px 8px', cursor: 'pointer' }}
+                      >
+                        Analyze
+                      </button>
+                    </div>
+                  )}
+                  {analysisError && (
+                    <div style={{ marginTop: 6, fontSize: 11, color: '#9F1239' }}>{analysisError}</div>
+                  )}
+                </div>
+              )}
+            </div>
             {approvals.length > 0 && <div className="input-group"><label className="input-label">Builder Code</label><div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}><button type="button" onClick={() => setSelectedBuilder('')} style={{ padding: '5px 10px', borderRadius: 999, border: '1.5px solid #DBE4F0', background: selectedBuilder === '' ? '#F8FAFC' : '#FFFFFF', color: selectedBuilder === '' ? '#334155' : '#64748B', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>None</button>{approvals.map((approval) => <button key={approval.builder_code} type="button" onClick={() => setSelectedBuilder(approval.builder_code)} style={{ padding: '5px 10px', borderRadius: 999, border: selectedBuilder === approval.builder_code ? '1.5px solid #2563EB' : '1.5px solid #DBE4F0', background: selectedBuilder === approval.builder_code ? '#EFF6FF' : '#FFFFFF', color: selectedBuilder === approval.builder_code ? '#2563EB' : '#334155', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>{approval.builder_code}</button>)}</div></div>}
             <div style={{ background: '#F8FAFC', borderRadius: 14, border: '1px solid #E2E8F0', padding: '10px 14px', fontSize: 11, color: '#64748B', lineHeight: 1.7 }}><div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Type</span><span style={{ fontWeight: 700, color: '#334155' }}>{orderType === 'market' ? 'Market' : 'Limit'} {side === 'buy' ? 'Long' : 'Short'}</span></div><div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Size</span><span style={{ fontWeight: 700, color: '#334155' }}>{size || '--'} {selectedSymbol}</span></div>{notional > 0 && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Notional</span><span style={{ fontWeight: 700, color: '#334155' }}>${notional.toLocaleString('en-US', { maximumFractionDigits: 2 })}</span></div>}<div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Leverage</span><span style={{ fontWeight: 700, color: '#334155' }}>{leverage}x</span></div><div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Sign via</span><span style={{ fontWeight: 700, color: '#334155', display: 'flex', alignItems: 'center', gap: 4 }}><SignIcon />{executionMode === 'wallet' ? orderType === 'market' ? 'create_market_order' : 'create_order' : 'agent_wallet'}</span></div></div>
             {!isConnected ? <div style={{ textAlign: 'center', padding: '12px', background: '#F8FAFC', borderRadius: 14, fontSize: 13, color: '#64748B', border: '1px dashed #DBE4F0' }}>Connect wallet to trade</div> : <button type="submit" disabled={busy} style={{ padding: '12px', borderRadius: 14, border: 'none', cursor: busy ? 'not-allowed' : 'pointer', fontWeight: 700, fontSize: 14, color: '#FFFFFF', background: busy ? '#9CA3AF' : side === 'buy' ? 'linear-gradient(135deg, #10B981, #059669)' : 'linear-gradient(135deg, #EF4444, #DC2626)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>{renderPending ?? <><CoinBadge symbol={selectedSymbol} size={18} />{side === 'buy' ? 'Long' : 'Short'} {selectedSymbol}{notional > 0 && <span style={{ opacity: 0.8, fontWeight: 500, fontSize: 12 }}>• ${notional.toLocaleString('en-US', { maximumFractionDigits: 0 })}</span>}</>}</button>}
