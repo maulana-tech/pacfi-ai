@@ -135,7 +135,7 @@ router.get('/portfolio', async (c) => {
 
     let balance = 0;
     let positions: any[] = [];
-    
+
     try {
       [balance, positions] = await Promise.all([
         pacificaClient.getBalance(wallet.walletAddress).catch(() => 0),
@@ -193,95 +193,6 @@ router.get('/portfolio', async (c) => {
   }
 });
 
-    const allTrades = await db
-      .select({
-        pnl: trades.pnl,
-        roi: trades.roi,
-        status: trades.status,
-        executedAt: trades.executedAt,
-      })
-      .from(trades)
-      .where(eq(trades.userId, userRow.id))
-      .orderBy(asc(trades.executedAt));
-
-    const closedTrades = allTrades.filter((t) => t.status === 'CLOSED');
-    const wins = closedTrades.filter((t) => parseNumber(t.pnl, 0) > 0);
-    const losses = closedTrades.filter((t) => parseNumber(t.pnl, 0) <= 0);
-
-    const totalPnL = closedTrades.reduce((acc, t) => acc + parseNumber(t.pnl, 0), 0);
-    const totalROI = closedTrades.reduce((acc, t) => acc + parseNumber(t.roi, 0), 0);
-    const winRate = closedTrades.length > 0 ? (wins.length / closedTrades.length) * 100 : 0;
-
-    const avgWin = wins.length > 0 ? wins.reduce((a, t) => a + parseNumber(t.pnl, 0), 0) / wins.length : 0;
-    const avgLoss = losses.length > 0 ? losses.reduce((a, t) => a + parseNumber(t.pnl, 0), 0) / losses.length : 0;
-    const sumWins = wins.reduce((a, t) => a + parseNumber(t.pnl, 0), 0);
-    const sumLosses = Math.abs(losses.reduce((a, t) => a + parseNumber(t.pnl, 0), 0));
-    const profitFactor = sumLosses > 0 ? sumWins / sumLosses : sumWins > 0 ? 99 : 0;
-
-    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-    const recentTrades = closedTrades.filter(
-      (t) => t.executedAt && new Date(t.executedAt) >= thirtyDaysAgo
-    );
-
-    const dayMap = new Map<string, number>();
-    for (const t of recentTrades) {
-      const day = new Date(t.executedAt!).toLocaleDateString('en-US', {
-        month: 'short',
-        day: 'numeric',
-      });
-      dayMap.set(day, (dayMap.get(day) ?? 0) + parseNumber(t.pnl, 0));
-    }
-
-    const equityCurve: { date: string; equity: number }[] = [];
-    let runningEquity = balance - totalPnL;
-    for (let i = 30; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      const label = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-      runningEquity += dayMap.get(label) ?? 0;
-      equityCurve.push({ date: label, equity: parseFloat(runningEquity.toFixed(2)) });
-    }
-
-    const roiValues = closedTrades.map((t) => parseNumber(t.roi, 0));
-    const sharpeRatio = computeSharpe(roiValues);
-
-    let peak = equityCurve[0]?.equity ?? 0;
-    let maxDrawdown = 0;
-    for (const point of equityCurve) {
-      if (point.equity > peak) peak = point.equity;
-      const drawdown = peak > 0 ? ((peak - point.equity) / peak) * 100 : 0;
-      if (drawdown > maxDrawdown) maxDrawdown = drawdown;
-    }
-
-    const openPnl = openPositions.reduce((acc, p) => acc + parseNumber(p.unrealizedPnl ?? 0, 0), 0);
-    const availableBalance = balance - openPositions.reduce((acc, p) => {
-      return acc + parseNumber(p.size, 0) * parseNumber(p.entryPrice, 0) / parseNumber(p.leverage ?? 1, 1);
-    }, 0);
-
-    return c.json(
-      successEnvelope({
-        totalBalance: balance,
-        availableBalance: Math.max(0, availableBalance),
-        totalPnL,
-        openPnl,
-        totalROI,
-        winRate,
-        sharpeRatio,
-        maxDrawdown,
-        avgWin,
-        avgLoss,
-        profitFactor,
-        totalTrades: allTrades.length,
-        allocation,
-        equityCurve,
-      })
-    );
-  } catch (error) {
-    console.error('[Dashboard] Error fetching portfolio:', error);
-    return c.json(errorEnvelope('Failed to fetch portfolio'), 500);
-  }
-});
-
 router.get('/positions', async (c) => {
   try {
     const wallet = getWalletContext(c);
@@ -295,7 +206,7 @@ router.get('/positions', async (c) => {
     } catch (apiError) {
       console.warn('[Dashboard] API error getting positions:', apiError);
     }
-    
+
     const normalized = Array.isArray(positions)
       ? (positions as PositionLike[]).map((item) => {
           const symbol = String(item.symbol ?? 'UNKNOWN').toUpperCase();
@@ -561,16 +472,17 @@ router.get('/swarm-history', async (c) => {
       .limit(limit);
 
     const tradeIds = recentTrades.map((t) => t.id);
-    const coordinatorLogs = tradeIds.length > 0
-      ? await db
-          .select({
-            tradeId: aiLogs.tradeId,
-            confidence: aiLogs.confidence,
-            outputDecision: aiLogs.outputDecision,
-          })
-          .from(aiLogs)
-          .where(eq(aiLogs.userId, userRow.id))
-      : [];
+    const coordinatorLogs =
+      tradeIds.length > 0
+        ? await db
+            .select({
+              tradeId: aiLogs.tradeId,
+              confidence: aiLogs.confidence,
+              outputDecision: aiLogs.outputDecision,
+            })
+            .from(aiLogs)
+            .where(eq(aiLogs.userId, userRow.id))
+        : [];
 
     const confidenceByTrade = new Map<string, number>();
     for (const log of coordinatorLogs) {
@@ -582,11 +494,13 @@ router.get('/swarm-history', async (c) => {
     const decisions = recentTrades.map((t) => {
       const pnlVal = parseNumber(t.pnl, 0);
       const result = t.status === 'OPEN' ? 'OPEN' : pnlVal > 0 ? 'WIN' : 'LOSS';
-      const pnlStr = t.pnl
-        ? `${pnlVal >= 0 ? '+' : ''}$${Math.abs(pnlVal).toFixed(2)}`
-        : null;
+      const pnlStr = t.pnl ? `${pnlVal >= 0 ? '+' : ''}$${Math.abs(pnlVal).toFixed(2)}` : null;
       const executedDate = t.executedAt ? new Date(t.executedAt) : new Date();
-      const time = executedDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+      const time = executedDate.toLocaleTimeString('en-US', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      });
 
       return {
         time,
@@ -675,26 +589,32 @@ type PacificaSortBy = 'pnl' | 'equity' | 'volume';
 
 function getPnlForPeriod(entry: PacificaLeaderboardEntry, period: PacificaPeriod): number {
   const raw =
-    period === '1d' ? entry.pnl_1d :
-    period === '7d' ? entry.pnl_7d :
-    period === '30d' ? entry.pnl_30d :
-    entry.pnl_all_time;
+    period === '1d'
+      ? entry.pnl_1d
+      : period === '7d'
+        ? entry.pnl_7d
+        : period === '30d'
+          ? entry.pnl_30d
+          : entry.pnl_all_time;
   return parseFloat(raw) || 0;
 }
 
 function getVolumeForPeriod(entry: PacificaLeaderboardEntry, period: PacificaPeriod): number {
   const raw =
-    period === '1d' ? entry.volume_1d :
-    period === '7d' ? entry.volume_7d :
-    period === '30d' ? entry.volume_30d :
-    entry.volume_all_time;
+    period === '1d'
+      ? entry.volume_1d
+      : period === '7d'
+        ? entry.volume_7d
+        : period === '30d'
+          ? entry.volume_30d
+          : entry.volume_all_time;
   return Math.abs(parseFloat(raw) || 0);
 }
 
 function mapPacificaLeaderboard(
   entries: PacificaLeaderboardEntry[],
   period: PacificaPeriod,
-  sortBy: PacificaSortBy,
+  sortBy: PacificaSortBy
 ): Array<{
   walletAddress: string;
   username: string | null;
